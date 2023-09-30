@@ -16,6 +16,7 @@ $nvimWinOption = if($IsWindows) { "nvim-win" } else { $null }
 $nvimWslOption = if($IsWindows) { "nvim-wsl" } else { $null }
 $nvimOption = if($IsLinux) { "nvim" } else { $null }
 $nvimTmuxOption = if($IsLinux) { "nvim-tmux" } else { $null }
+$codeOption = if(-not $configFile.isServer) { "code" } else { $null }
 $runOptions = @(
     $nvimWinTmuxOption,
     $nvimWinWslTmuxOption,
@@ -24,7 +25,7 @@ $runOptions = @(
     $nvimTmuxOption,
     $nvimOption,
     $vsOption,
-    "code"
+    $codeOption
 )
 $selectedOptions = $runOptions | Where-Object { $null -ne $_ }
 $selectedOption = $selectedOptions | fzf
