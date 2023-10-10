@@ -41,16 +41,12 @@ if($selectedOption -eq "vs") {
   code $repoOpenPath
 } elseif($selectedOption -eq "nvim-wsl-tmux") {
    wsl tmux new-session -d -s code -c $wslRepoDir
-   [int]$paneCount = wsl bash -c "tmux list-windows -t code | wc -l"
-   [int]$newPane = $paneCount
-   wsl tmux new-window -t code:$newPane -n $repoToOpen
+   [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $repoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
    wsl tmux send-keys -t code:$newPane "nvim $wslRepoDir/$repoToOpen" C-m
    Write-Host "Opening nvim in tmux session 'code'"
 } elseif($selectedOption -eq "nvim-win-tmux") {
    wsl tmux new-session -d -s code -c $wslRepoDir
-   [int]$paneCount = wsl bash -c "tmux list-windows -t code | wc -l"
-   [int]$newPane = $paneCount
-   wsl tmux new-window -t code:$newPane -n $repoToOpen
+   [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $repoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
    wsl tmux send-keys -t code:$newPane "pwsh.exe" C-m
    Start-Sleep 2
    wsl tmux send-keys -t code:$newPane "cd $repoOpenPath" C-m
@@ -67,5 +63,6 @@ if($selectedOption -eq "vs") {
 } else {
   Write-Output "No option selected"
 }
+
 
 
