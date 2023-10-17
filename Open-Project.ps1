@@ -8,9 +8,11 @@ $configFile = $configFileRaw | ConvertFrom-Json
 $repoDir = $configFile.repoDirectory
 $wslRepoDir = $configFile.wslRepoDirectory
 $exitKeyword = "<< Exit >>"
+$cloneKeyword = "<< Clone >>"
 
 do {
     $options = (Get-ChildItem $repoDir).Name
+    $options += $cloneKeyword
 
     if($Continuous) {
       $options += $exitKeyword
@@ -22,10 +24,13 @@ do {
       continue
     } elseif($repoToOpen.Trim() -eq $exitKeyword) {
       break
+    } elseif($repoToOpen.Trim() -eq $cloneKeyword) {
+      $repoToClone = Read-Host "Enter the repo to clone:"
+      git -C $repoDir clone $repoToClone
+      continue
     }
 
     $repoOpenPath = "$repoDir/$repoToOpen"
-
     $solutionFile = Get-ChildItem $repoOpenPath/*.sln
 
     $vsOption = if($IsWindows -and $solutionFile) { "vs" } else { $null }
