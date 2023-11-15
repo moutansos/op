@@ -1,5 +1,6 @@
 param(
-    [switch]$Continuous
+    [switch]$Continuous,
+    [switch]$NoRepoUpdate
 )
 
 $configFileRaw = Get-Content $PSScriptRoot/config.json -Raw
@@ -9,6 +10,30 @@ $repoDir = $configFile.repoDirectory
 $wslRepoDir = $configFile.wslRepoDirectory
 $exitKeyword = "<< Exit >>"
 $cloneKeyword = "<< Clone >>"
+
+function Update-Repo {
+    param(
+        [string]$repoDir
+    )
+
+    if($NoRepoUpdate) {
+        return
+    }
+
+    if(-not (Test-Path $repoDir/.git)) {
+        Write-Host "Repo $repoDir is not a git repo"
+        return
+    }
+
+    $result = git -C $repoDir status
+    if($result -like "*Your branch is up to date*") {
+        Write-Host "Repo $repoDir is up to date"
+        return
+    }
+    
+    Write-Host "Updating repo $repoDir"
+    git -C $repoDir pull
+}
 
 do {
     $options = (Get-ChildItem $repoDir).Name
@@ -58,6 +83,7 @@ do {
       Invoke-Item $solutionFile 
     } elseif($selectedOption -in @("nvim-win", "nvim")) {
       Set-Location $repoOpenPath
+      Update-Repo $repoOpenPath
       nvim $repoOpenPath
     } elseif($selectedOption -eq "nvim-wsl") {
       wsl nvim $wslRepoDir/$repoToOpen
@@ -69,6 +95,7 @@ do {
        wsl tmux send-keys -t code:$newPane "nvim $wslRepoDir/$repoToOpen" C-m
        Write-Host "Opening nvim in tmux session 'code'"
     } elseif($selectedOption -eq "nvim-win-tmux") {
+       Update-Repo $repoOpenPath
        wsl tmux new-session -d -s code -c $wslRepoDir
        [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $repoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
        wsl tmux send-keys -t code:$newPane "pwsh.exe" C-m
@@ -77,6 +104,7 @@ do {
        wsl tmux send-keys -t code:$newPane "nvim $repoOpenPath" C-m
        Write-Host "Opening nvim in tmux session 'code'"
     } elseif($selectedOption -eq "nvim-tmux") {
+       Update-Repo $repoOpenPath
        tmux new-session -d -s code -c $wslRepoDir
        [int]$paneCount = tmux list-windows -t code | wc -l
        [int]$newPane = $paneCount

@@ -1,9 +1,10 @@
+#include "fzflib.h"
+#include "configlib.h"
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
-#include "fzflib.h"
 
 char *getDirectoryListing(char *directory) {
   DIR *dirp = opendir(directory);
@@ -18,7 +19,7 @@ char *getDirectoryListing(char *directory) {
       }
 
       if (strlen(buffer) + strlen(dp->d_name) + 1 > 1024) {
-        buffer = realloc(buffer, strlen(buffer) + strlen(dp->d_name) + 1);
+        buffer = realloc(buffer, (strlen(buffer) + strlen(dp->d_name) + 1) * 2);
       }
 
       strcat(buffer, dp->d_name);
@@ -37,7 +38,11 @@ char *getDirectoryListing(char *directory) {
   return buffer;
 }
 
+
 int main() {
+  struct OpConfigs* config = loadConfigs();
+  printf("Source dir: %s\n", config->sourceDir);
+  printConfig(config);
   char *choices = getDirectoryListing("/home/ben/source/repos");
   char *selectedValue = askChoices(choices);
 
@@ -49,6 +54,7 @@ int main() {
     exit(EXIT_FAILURE);
   }
 
+  free(config);
+  free(choices);
   return 0;
 }
-
