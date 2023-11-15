@@ -26,8 +26,8 @@ function Update-Repo {
     }
 
     $result = git -C $repoDir status
-    if($result -like "*Your branch is up to date*") {
-        Write-Host "Repo $repoDir is up to date"
+    if(-not ($result -like "*Nothing to commit*")) {
+        Write-Host "Repo $repoDir has uncommitted changes"
         return
     }
     
