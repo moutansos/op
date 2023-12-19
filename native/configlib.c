@@ -44,10 +44,11 @@ void runSet(char *args, struct OpConfigs *currentConfig) {
   char *key = strtrim(strtok(args, " "));
   char *value = strtrim(strtok(NULL, ""));
 
-  printf("Setting %s to '%s'\n", key, value);
+  printf("\nSetting %s to '%s'\n", key, value);
 
   if (strcmp(key, "sourceDir") == 0) {
     currentConfig->sourceDir = value;
+    printf("\nSet sourceDir in config to '%s'\n", currentConfig->sourceDir);
   } else if (strcmp(key, "isServer") == 0) {
     currentConfig->isServer = strcmp(value, "true") == 0;
   } else {
@@ -57,7 +58,7 @@ void runSet(char *args, struct OpConfigs *currentConfig) {
 }
 
 void processLine(char *line, struct OpConfigs *currentConfig) {
-  if(line[0] == '#') {
+  if (line[0] == '#') {
     return;
   } else if (line[0] == '\n') {
     return;
@@ -65,8 +66,8 @@ void processLine(char *line, struct OpConfigs *currentConfig) {
     return;
   }
 
-  char *command = strtrim(strtok(line, " "));
-  char *args = strtrim(strtok(NULL, ""));
+  char *command = strtok(line, " ");
+  char *args = strtok(NULL, "");
 
   if (strcmp(command, "set") == 0) {
     runSet(args, currentConfig);
@@ -109,5 +110,6 @@ struct OpConfigs *loadConfigs() {
   config->sourceDir = "UNSET";
 
   loadConfig("./op.rc", config);
+  printf("\nAt end of loadConfig sourceDir is '%s'\n", config->sourceDir);
   return config;
 }

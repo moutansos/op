@@ -11,6 +11,8 @@ $wslRepoDir = $configFile.wslRepoDirectory
 $exitKeyword = "<< Exit >>"
 $cloneKeyword = "<< Clone >>"
 
+$preferedShell = $configFile.preferedShell
+
 function Update-Repo {
     param(
         [string]$repoDir
@@ -33,6 +35,20 @@ function Update-Repo {
     
     Write-Host "Updating repo $repoDir"
     git -C $repoDir pull
+}
+
+function Start-TmuxShellPane($repoOpenPath, $isWsl = $false) {
+   if($preferedShell -and -not $isWsl) {
+       tmux split-window -t code:$newPane -v
+       tmux send-keys -t code:$newPane.1 "$preferedShell" C-m
+       tmux send-keys -t code:$newPane.1 "cd $repoOpenPath" C-m
+       tmux select-pane -t code:$newPane.0
+   } elseif ($preferedShell -and $isWsl) {
+       wsl tmux split-window -t code:$newPane -v
+       wsl tmux send-keys -t code:$newPane.1 "$preferedShell" C-m
+       wsl tmux send-keys -t code:$newPane.1 "cd $repoOpenPath" C-m
+       wsl tmux select-pane -t code:$newPane.0
+   }
 }
 
 do {
@@ -92,7 +108,11 @@ do {
     } elseif($selectedOption -eq "nvim-wsl-tmux") {
        wsl tmux new-session -d -s code -c $wslRepoDir
        [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $repoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
-       wsl tmux send-keys -t code:$newPane "nvim $wslRepoDir/$repoToOpen" C-m
+       [string]$wslRepoOpenPath = "$wslRepoDir/$repoToOpen"
+       wsl tmux send-keys -t code:$newPane "nvim $wslRepoOpenPath" C-m
+
+       Start-TmuxShellPane $repoOpenPath $true
+
        Write-Host "Opening nvim in tmux session 'code'"
     } elseif($selectedOption -eq "nvim-win-tmux") {
        Update-Repo $repoOpenPath
@@ -102,6 +122,9 @@ do {
        Start-Sleep 2
        wsl tmux send-keys -t code:$newPane "cd $repoOpenPath" C-m
        wsl tmux send-keys -t code:$newPane "nvim $repoOpenPath" C-m
+
+       Start-TmuxShellPane $repoOpenPath $true
+
        Write-Host "Opening nvim in tmux session 'code'"
     } elseif($selectedOption -eq "nvim-tmux") {
        Update-Repo $repoOpenPath
@@ -111,6 +134,9 @@ do {
        tmux new-window -t code:$newPane -n $repoToOpen
        tmux send-keys -t code:$newPane "cd $repoOpenPath" C-m
        tmux send-keys -t code:$newPane "nvim $repoOpenPath" C-m
+        
+       Start-TmuxShellPane $repoOpenPath
+
        Write-Host "Opening nvim in tmux session 'code'"
     } else {
       Write-Output "No option selected"

@@ -38,10 +38,20 @@ char *getDirectoryListing(char *directory) {
   return buffer;
 }
 
+void print_hex(const char *s)
+{
+  while(*s)
+    printf("%02x ", (unsigned int) *s++);
+  printf("\n");
+}
+
 
 int main() {
   struct OpConfigs* config = loadConfigs();
   printf("Source dir: %s\n", config->sourceDir);
+
+  print_hex(config->sourceDir);
+
   printConfig(config);
   char *choices = getDirectoryListing("/home/ben/source/repos");
   char *selectedValue = askChoices(choices);
