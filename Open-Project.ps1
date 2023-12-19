@@ -46,6 +46,9 @@ function Start-TmuxShellPane($repoOpenPath, $isWsl = $false) {
    } elseif ($preferedShell -and $isWsl) {
        wsl tmux split-window -t code:$newPane -v
        wsl tmux send-keys -t code:$newPane.1 "$preferedShell" C-m
+       if($preferedShell -eq "pwsh.exe") {
+           Start-Sleep 1
+       }
        wsl tmux send-keys -t code:$newPane.1 "cd $repoOpenPath" C-m
        wsl tmux select-pane -t code:$newPane.0
    }
