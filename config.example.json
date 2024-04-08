@@ -1,5 +1,6 @@
 {
     "repoDirectory": "~/source/repos",
     "wslRepoDirectory": "/mnt/c/Users/bbrougher/source/repos",
-    "isServer": true
+    "isServer": false,
+    "preferedShell": "zsh"
 }
