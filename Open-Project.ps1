@@ -11,6 +11,7 @@ $wslRepoDir = $configFile.wslRepoDirectory
 $exitKeyword = "<< Exit >>"
 $cloneKeyword = "<< Clone >>"
 
+$customEntries = $configFile.customEntries
 $preferedShell = $configFile.preferedShell
 
 function Update-Repo {
@@ -37,6 +38,21 @@ function Update-Repo {
     git -C $repoDir pull
 }
 
+function Clean-ForBash {
+    param(
+        [string]$incomingVal
+    )
+
+    $cur = $incomingVal
+    $escapeCharacters = @( " ", "(", ")", "'", "&", ";", "!", "{", "}", "[", "]", "``", "`$", "~", ">", "<", "|", "?", "*", "#", "@" )
+
+    foreach($char in $escapeCharacters) {
+        $cur = $cur.Replace($char, "\$char")
+    }
+
+    return $cur
+}
+
 function Start-TmuxShellPane($repoOpenPath, $isWsl = $false) {
    if($preferedShell -and -not $isWsl) {
        tmux split-window -t code:$newPane -v
@@ -57,6 +73,7 @@ function Start-TmuxShellPane($repoOpenPath, $isWsl = $false) {
 do {
     $options = (Get-ChildItem $repoDir).Name
     $options += $cloneKeyword
+    $options += [string[]]($customEntries.name)
 
     if($Continuous) {
       $options += $exitKeyword
@@ -74,7 +91,21 @@ do {
       continue
     }
 
-    $repoOpenPath = "$repoDir/$repoToOpen"
+
+    $customOptionsSelected = $customEntries | Where-Object { $_.name -eq $repoToOpen }
+    if($customOptionsSelected) {
+      if($IsWindows) {
+          $repoOpenPath = Invoke-Expression "`"$($customOptionsSelected.paths.win)`""
+      } elseif($IsLinux) {
+          $repoOpenPath = Invoke-Expression "`"$($customOptionsSelected.paths.linux)`""
+      } else {
+          Write-Host "Unsupported OS"
+          break
+      }
+    } else {
+      $repoOpenPath = "$repoDir/$repoToOpen"
+    }
+
     $solutionFile = Get-ChildItem $repoOpenPath/*.sln
 
     $vsOption = if($IsWindows -and $solutionFile) { "vs" } else { $null }
@@ -110,7 +141,8 @@ do {
       code $repoOpenPath
     } elseif($selectedOption -eq "nvim-wsl-tmux") {
        wsl tmux new-session -d -s code -c $wslRepoDir
-       [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $repoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
+       $cleanedRepoToOpen = Clean-ForBash $repoToOpen
+       [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $cleanedRepoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
        [string]$wslRepoOpenPath = "$wslRepoDir/$repoToOpen"
        wsl tmux send-keys -t code:$newPane "nvim $wslRepoOpenPath" C-m
 
@@ -120,7 +152,8 @@ do {
     } elseif($selectedOption -eq "nvim-win-tmux") {
        Update-Repo $repoOpenPath
        wsl tmux new-session -d -s code -c $wslRepoDir
-       [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $repoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
+       $cleanedRepoToOpen = Clean-ForBash $repoToOpen
+       [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $cleanedRepoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
        wsl tmux send-keys -t code:$newPane "pwsh.exe" C-m
        Start-Sleep 2
        wsl tmux send-keys -t code:$newPane "cd $repoOpenPath" C-m

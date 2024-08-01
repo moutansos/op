@@ -2,5 +2,14 @@
     "repoDirectory": "~/source/repos",
     "wslRepoDirectory": "/mnt/c/Users/bbrougher/source/repos",
     "isServer": false,
-    "preferedShell": "zsh"
+    "preferedShell": "zsh",
+    "customEntries": [
+        {
+            "name": "<< nvim-config >>",
+            "paths": {
+                "win": "$env:LOCALAPPDATA/nvim",
+                "linux": "~/.config/nvim"
+            }
+        }
+    ]
 }
