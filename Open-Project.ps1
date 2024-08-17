@@ -10,6 +10,7 @@ $repoDir = $configFile.repoDirectory
 $wslRepoDir = $configFile.wslRepoDirectory
 $exitKeyword = "<< Exit >>"
 $cloneKeyword = "<< Clone >>"
+$newRepoKeyword = "<< New Repo >>"
 
 $customEntries = $configFile.customEntries
 $preferedShell = $configFile.preferedShell
@@ -70,25 +71,47 @@ function Start-TmuxShellPane($repoOpenPath, $isWsl = $false) {
    }
 }
 
+$rerunWithThisRepoToOpen = $null
 do {
     $options = (Get-ChildItem $repoDir).Name
     $options += $cloneKeyword
+    $options += $newRepoKeyword
     $options += [string[]]($customEntries.name)
 
     if($Continuous) {
       $options += $exitKeyword
     }
 
-    [string]$repoToOpen = $options | fzf
+    [string]$repoToOpen = if([string]::IsNullOrWhitespace($rerunWithThisRepoToOpen)) {
+        $options | fzf
+    } else {
+        $tmp = $rerunWithThisRepoToOpen
+        $rerunWithThisRepoToOpen = $null
+        $tmp
+    }
 
+    $trimmedRepoToOpen = $repoToOpen.Trim()
     if(-not $repoToOpen) {
       continue
-    } elseif($repoToOpen.Trim() -eq $exitKeyword) {
+    } elseif($trimmedRepoToOpen -eq $exitKeyword) {
       break
-    } elseif($repoToOpen.Trim() -eq $cloneKeyword) {
+    } elseif($trimmedRepoToOpen -eq $cloneKeyword) {
       $repoToClone = Read-Host "Enter the repo to clone:"
       git -C $repoDir clone $repoToClone
+      # TODO: figure out how to pull the name of the repo out of here to use to send next time
+      # around the loop
       continue
+    } elseif($trimmedRepoToOpen -eq $newRepoKeyword) {
+        $repoToCreate = Read-Host "Enter the name of the repo to create:"
+        if([string]::IsNullOrWhitespace($repoToCreate)) {
+            Write-Host "Error, you did not enter the name of a repo to create. Please try again."
+            continue
+        }
+        [string]$pathToCreate = "$repoDir/$repoToCreate"
+        mkdir $pathToCreate
+        git -C $pathToCreate init
+        $rerunWithThisRepoToOpen = $repoToCreate
+        continue
     }
 
 
