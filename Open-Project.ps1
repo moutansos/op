@@ -131,6 +131,8 @@ do {
 
     $solutionFile = Get-ChildItem $repoOpenPath/*.sln
 
+    $openCodeCommands = Get-Command opencode -ErrorAction SilentlyContinue
+
     $vsOption = if($IsWindows -and $solutionFile) { "vs" } else { $null }
     $nvimWinTmuxOption = if($IsWindows) { "nvim-win-tmux" } else { $null }
     $nvimWinWslTmuxOption = if($IsWindows) { "nvim-wsl-tmux" } else { $null }
@@ -138,6 +140,7 @@ do {
     $nvimWslOption = if($IsWindows) { "nvim-wsl" } else { $null }
     $nvimOption = if($IsLinux) { "nvim" } else { $null }
     $nvimTmuxOption = if($IsLinux) { "nvim-tmux" } else { $null }
+    $opencodeOption = if($openCodeCommands.Count -ne 0) { "opencode-here" } else { $null }
     $codeOption = if(-not $configFile.isServer) { "code" } else { $null }
     $runOptions = @(
         $nvimWinTmuxOption,
@@ -147,7 +150,9 @@ do {
         $nvimTmuxOption,
         $nvimOption,
         $vsOption,
-        $codeOption
+        $codeOption,
+        $opencodeOption,
+        "cd-here"
     )
     $selectedOptions = $runOptions | Where-Object { $null -ne $_ }
     $selectedOption = $selectedOptions | fzf
@@ -162,6 +167,12 @@ do {
       wsl nvim $wslRepoDir/$repoToOpen
     } elseif($selectedOption -eq "code") {
       code $repoOpenPath
+    } elseif($selectedOption -eq "opencode-here") {
+      Set-Location $repoOpenPath
+      opencode
+    } elseif($selectedOption -eq "cd-here") {
+      Set-Location $repoOpenPath
+      & $preferedShell
     } elseif($selectedOption -eq "nvim-wsl-tmux") {
        wsl tmux new-session -d -s code -c $wslRepoDir
        $cleanedRepoToOpen = Clean-ForBash $repoToOpen
