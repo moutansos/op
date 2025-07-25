@@ -1,6 +1,6 @@
-#ifndef FZF_LIB_INCLUDED
-#define FZF_LIB_INCLUDED
+#ifndef fzf_lib_included
+#define fzf_lib_included
 
 char* askChoices(const char* choices);
 
-#endif // FZF_LIB_INCLUDED
+#endif // fzf_lib_included

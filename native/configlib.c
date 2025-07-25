@@ -47,7 +47,11 @@ void runSet(char *args, struct OpConfigs *currentConfig) {
   printf("\nSetting %s to '%s'\n", key, value);
 
   if (strcmp(key, "sourceDir") == 0) {
-    currentConfig->sourceDir = value;
+    if (value[0] == '"' && value[strlen(value)-1] == '"') {
+      value[strlen(value)-1] = '\0';
+      value++;
+    }
+    currentConfig->sourceDir = strdup(value);
     printf("\nSet sourceDir in config to '%s'\n", currentConfig->sourceDir);
   } else if (strcmp(key, "isServer") == 0) {
     currentConfig->isServer = strcmp(value, "true") == 0;

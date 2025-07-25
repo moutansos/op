@@ -1,10 +1,12 @@
 #include "fzflib.h"
 #include "configlib.h"
+#include "pathlib.h"
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 char *getDirectoryListing(char *directory) {
   DIR *dirp = opendir(directory);
@@ -38,19 +40,45 @@ char *getDirectoryListing(char *directory) {
   return buffer;
 }
 
-void print_hex(const char *s)
-{
+void print_hex(const char *s) {
   while(*s)
     printf("%02x ", (unsigned int) *s++);
   printf("\n");
 }
 
+void execShell() {
+    char *shell = getenv("SHELL");
+    if (!shell) shell = "/bin/bash";
+
+    execl(shell, shell, NULL);
+}
+
+void cdHere(char *path) {
+  printf("Changing directory to: %s\n", path);
+  if (chdir(path) != 0) {
+    perror("Unable to change directory");
+    exit(EXIT_FAILURE);
+  }
+
+  execShell();
+}
+
+void nvimHere(char *path) {
+  printf("Opening nvim in directory: %s\n", path);
+  char *nvim = "nvim";
+  char cmd[1024];
+  if(chdir(path) != 0) {
+    perror("Unable to change directory for nvim");
+    exit(EXIT_FAILURE);
+  }
+  snprintf(cmd, sizeof(cmd), "%s %s", nvim, path);
+  system(cmd);
+}
 
 int main() {
   struct OpConfigs* config = loadConfigs();
-  printf("Source dir: %s\n", config->sourceDir);
 
-  print_hex(config->sourceDir);
+  // print_hex(config->sourceDir);
 
   printConfig(config);
   char *choices = getDirectoryListing("/home/ben/source/repos");
@@ -58,12 +86,41 @@ int main() {
 
   if (selectedValue != NULL) {
     printf("Selected value: %s\n", selectedValue);
-    free(selectedValue);
   } else {
     printf("No value selected.\n");
     exit(EXIT_FAILURE);
   }
 
+  char *actionChoices = {
+    "nvim-here\n"
+    "cd-here\n"
+  };
+
+  char *actionSelected = askChoices(actionChoices);
+
+  if (actionSelected != NULL) {
+    printf("Action selected: %s\n", actionSelected);
+  } else {
+    printf("No action selected.\n");
+    exit(EXIT_FAILURE);
+  }
+
+  char *path = malloc(strlen(config->sourceDir) + strlen(selectedValue) + 2);
+  sprintf(path, "%s/%s", config->sourceDir, selectedValue);
+  path = expand_tilde(path);
+
+  if (strcmp(actionSelected, "cd-here") == 0) {
+    cdHere(path);
+  } else if (strcmp(actionSelected, "nvim-here") == 0) {
+    nvimHere(path);
+  } else {
+    printf("Unknown action: %s\n", actionSelected);
+    exit(EXIT_FAILURE);
+  }
+
+  free(path);
+  free(selectedValue);
+  free(actionSelected);
   free(config);
   free(choices);
   return 0;
