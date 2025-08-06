@@ -6,6 +6,7 @@
 struct OpConfigs {
   char *sourceDir;
   bool isServer;
+  char *shellPrefix;
 };
 
 struct OpConfigs *loadConfigs();

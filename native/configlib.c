@@ -38,6 +38,7 @@ char *strtrim(char *str) {
 struct OpConfigs {
   char *sourceDir;
   bool isServer;
+  char *shellPrefix;
 };
 
 void runSet(char *args, struct OpConfigs *currentConfig) {
@@ -55,6 +56,13 @@ void runSet(char *args, struct OpConfigs *currentConfig) {
     printf("\nSet sourceDir in config to '%s'\n", currentConfig->sourceDir);
   } else if (strcmp(key, "isServer") == 0) {
     currentConfig->isServer = strcmp(value, "true") == 0;
+  } else if (strcmp(key, "shellPrefix") == 0) {
+    if (value[0] == '"' && value[strlen(value)-1] == '"') {
+      value[strlen(value)-1] = '\0';
+      value++;
+    }
+    currentConfig->shellPrefix = strdup(value);
+    printf("\nSet shellPrefix in config to '%s'\n", currentConfig->shellPrefix);
   } else {
     printf("Unknown config key: %s\n", key);
     exit(EXIT_FAILURE);
@@ -103,6 +111,7 @@ void printConfig(struct OpConfigs *config) {
   printf("Config:\n");
   printf("  sourceDir: %s\n", config->sourceDir);
   printf("  isServer: %s\n", config->isServer ? "true" : "false");
+  printf("  shellPrefix: %s\n", config->shellPrefix);
 }
 
 struct OpConfigs *loadConfigs() {
@@ -112,6 +121,7 @@ struct OpConfigs *loadConfigs() {
   // Set defaults
   config->isServer = false;
   config->sourceDir = "UNSET";
+  config->shellPrefix = "";
 
   loadConfig("./op.rc", config);
   printf("\nAt end of loadConfig sourceDir is '%s'\n", config->sourceDir);
