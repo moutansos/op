@@ -178,7 +178,7 @@ do {
       Set-Location $repoOpenPath
       & $preferedShell
     } elseif($selectedOption -eq "nvim-wsl-tmux") {
-       wsl tmux new-session -d -s code -c $wslRepoDir
+       wsl tmux new-session -d -s code -n op -c $wslRepoDir
        $cleanedRepoToOpen = Clean-ForBash $repoToOpen
        [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $cleanedRepoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
        [string]$wslRepoOpenPath = "$wslRepoDir/$repoToOpen"
@@ -189,7 +189,7 @@ do {
        Write-Host "Opening nvim in tmux session 'code'"
     } elseif($selectedOption -eq "nvim-win-tmux") {
        Update-Repo $repoOpenPath
-       wsl tmux new-session -d -s code -c $wslRepoDir
+       wsl tmux new-session -d -s code -n op -c $wslRepoDir
        $cleanedRepoToOpen = Clean-ForBash $repoToOpen
        [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $cleanedRepoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
        wsl tmux send-keys -t code:$newPane "pwsh.exe" C-m
@@ -202,7 +202,7 @@ do {
        Write-Host "Opening nvim in tmux session 'code'"
     } elseif($selectedOption -eq "nvim-tmux") {
        Update-Repo $repoOpenPath
-       tmux new-session -d -s code -c $wslRepoDir
+       tmux new-session -d -s code -n op -c $wslRepoDir
        [int]$paneCount = tmux list-windows -t code | wc -l
        [int]$newPane = $paneCount
        tmux new-window -t code:$newPane -n $repoToOpen
