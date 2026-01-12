@@ -58,7 +58,7 @@ function Start-TmuxShellPane($repoOpenPath, $isWsl = $false) {
    if($preferedShell -and -not $isWsl) {
        tmux split-window -t code:$newPane -v
        tmux send-keys -t code:$newPane.1 "$preferedShell" C-m
-       tmux send-keys -t code:$newPane.1 "cd $repoOpenPath" C-m
+       tmux send-keys -t code:$newPane.1 "cd `"$repoOpenPath`"" C-m
        tmux resize-pane -t code:$newPane.1 -y 20
        tmux send-keys -t code:$newPane.1 "clear" C-m
        tmux select-pane -t code:$newPane.0
@@ -68,7 +68,7 @@ function Start-TmuxShellPane($repoOpenPath, $isWsl = $false) {
        if($preferedShell -eq "pwsh.exe") {
           Start-Sleep -Milliseconds 500
        }
-       wsl tmux send-keys -t code:$newPane.1 "cd $repoOpenPath" C-m
+       wsl tmux send-keys -t code:$newPane.1 "cd `"$repoOpenPath`"" C-m
        wsl tmux send-keys -t code:$newPane.1 "clear" C-m
        wsl tmux resize-pane -t code:$newPane.1 -y 20
        wsl tmux select-pane -t code:$newPane.0
@@ -194,8 +194,8 @@ do {
        [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $cleanedRepoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
        wsl tmux send-keys -t code:$newPane "pwsh.exe" C-m
        Start-Sleep 2
-       wsl tmux send-keys -t code:$newPane "cd $repoOpenPath" C-m
-       wsl tmux send-keys -t code:$newPane "nvim $repoOpenPath" C-m
+       wsl tmux send-keys -t code:$newPane "cd `"$repoOpenPath`"" C-m
+       wsl tmux send-keys -t code:$newPane "nvim `"$repoOpenPath`"" C-m
 
        Start-TmuxShellPane $repoOpenPath $true
 
@@ -206,8 +206,8 @@ do {
        [int]$paneCount = tmux list-windows -t code | wc -l
        [int]$newPane = $paneCount
        tmux new-window -t code:$newPane -n $repoToOpen
-       tmux send-keys -t code:$newPane "cd $repoOpenPath" C-m
-       tmux send-keys -t code:$newPane "nvim $repoOpenPath" C-m
+       tmux send-keys -t code:$newPane "cd `"$repoOpenPath`"" C-m
+       tmux send-keys -t code:$newPane "nvim `"$repoOpenPath`"" C-m
         
        Start-TmuxShellPane $repoOpenPath
 
