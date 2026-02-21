@@ -16,11 +16,21 @@ $customEntries = $configFile.customEntries
 $customCommands = $configFile.customCommands
 $preferedShell = $configFile.preferedShell
 
+$allCommands = $customCommands + @(
+    @{
+        name = "new-worktree"
+        command = "$PSScriptRoot/scripts/New-GitWorktree.ps1"
+        runInPreferredShell = $false
+    }
+)
+
 function Invoke-HereInPreferredShell {
     param(
         [string]$command,
         [string]$location
     )
+
+    $command = $command.Replace("{{oproot}}", "$PSScriptRoot")
 
     if($preferedShell -eq "pwsh.exe") {
         pwsh.exe -WorkingDirectory $location -NoExit -c "$command"
@@ -278,7 +288,7 @@ do {
         $codeOption,
         "cd-here"
     )
-    $runOptions += $customCommands | ForEach-Object { $_.name }
+    $runOptions += $allCommands | ForEach-Object { $_.name }
     $selectedOptions = $runOptions | Where-Object { $null -ne $_ }
     $selectedOption = $selectedOptions | fzf
 
@@ -353,7 +363,7 @@ do {
        Write-Host "Opening nvim in tmux session 'code'"
     } else {
       $commandFound = $false
-      foreach ($customCommand in $customCommands) {
+      foreach ($customCommand in $allCommands) {
         if($customCommand.name -eq $selectedOption) {
           $commandFound = $true
           $commandToRun = $customCommand.command
