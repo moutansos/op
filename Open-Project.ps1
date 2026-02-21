@@ -45,7 +45,7 @@ function Clean-ForBash {
     )
 
     $cur = $incomingVal
-    $escapeCharacters = @( " ", "(", ")", "'", "&", ";", "!", "{", "}", "[", "]", "``", "`$", "~", ">", "<", "|", "?", "*", "#", "@" )
+    $escapeCharacters = @( " ", "(", ")", "'", "&", ";", "!", "{", "}", "[", "]", "``", "`$", ">", "<", "|", "?", "*", "#", "@" )
 
     foreach($char in $escapeCharacters) {
         $cur = $cur.Replace($char, "\$char")
@@ -54,25 +54,110 @@ function Clean-ForBash {
     return $cur
 }
 
-function Start-TmuxShellPane($repoOpenPath, $isWsl = $false) {
+function Get-TmuxBaseIndex($isWsl = $false) {
+    if($isWsl) {
+        $baseIndexRaw = wsl tmux show-options -gv base-index 2>$null
+    } else {
+        $baseIndexRaw = tmux show-options -gv base-index 2>$null
+    }
+
+    if([string]::IsNullOrWhiteSpace($baseIndexRaw)) {
+        return 0
+    }
+
+    [int]$parsedBaseIndex = 0
+    if([int]::TryParse($baseIndexRaw.Trim(), [ref]$parsedBaseIndex)) {
+        return $parsedBaseIndex
+    }
+
+    return 0
+}
+
+function Get-NextTmuxWindowIndex($sessionName, $isWsl = $false) {
+    [int]$baseIndex = Get-TmuxBaseIndex $isWsl
+
+    if($isWsl) {
+        $windowIndexesRaw = wsl tmux list-windows -t $sessionName -F '#{window_index}' 2>$null
+    } else {
+        $windowIndexesRaw = tmux list-windows -t $sessionName -F '#{window_index}' 2>$null
+    }
+
+    [int[]]$windowIndexes = @()
+    foreach($indexRaw in $windowIndexesRaw) {
+        [int]$parsedWindowIndex = 0
+        if([int]::TryParse($indexRaw.Trim(), [ref]$parsedWindowIndex)) {
+            $windowIndexes += $parsedWindowIndex
+        }
+    }
+
+    [int]$candidateWindowIndex = $baseIndex
+    while($windowIndexes -contains $candidateWindowIndex) {
+        $candidateWindowIndex++
+    }
+
+    return $candidateWindowIndex
+}
+
+function Get-TmuxDefaultShell($isWsl = $false) {
+    if($isWsl) {
+        $defaultShellRaw = wsl tmux show-options -gv default-shell 2>$null
+    } else {
+        $defaultShellRaw = tmux show-options -gv default-shell 2>$null
+    }
+
+    if([string]::IsNullOrWhiteSpace($defaultShellRaw)) {
+        return "sh"
+    }
+
+    return $defaultShellRaw.Trim()
+}
+
+function Get-ShellCdCommand($shellName, $pathToCd) {
+    $shellCommandRaw = "$shellName".Trim()
+    $shellExecutable = ($shellCommandRaw -split '\\s+')[0]
+    $shellNameLower = [System.IO.Path]::GetFileName($shellExecutable).ToLowerInvariant()
+    $powerShellNames = @("pwsh", "pwsh.exe", "powershell", "powershell.exe")
+
+    if($powerShellNames -contains $shellNameLower) {
+        return "cd `"$pathToCd`""
+    }
+
+    $escapedPath = Clean-ForBash $pathToCd
+    return "cd $escapedPath"
+}
+
+function Start-TmuxShellPane($repoOpenPath, $windowIndex, $isWsl = $false) {
+   $pathToCd = $repoOpenPath
+
+   if($isWsl -and $preferedShell -ne "pwsh.exe") {
+       $convertedPath = wsl wslpath -a "$repoOpenPath" 2>$null
+       if(-not [string]::IsNullOrWhiteSpace($convertedPath)) {
+           $pathToCd = $convertedPath.Trim()
+       }
+   }
+
+   $cdCommand = Get-ShellCdCommand $preferedShell $pathToCd
+
    if($preferedShell -and -not $isWsl) {
-       tmux split-window -t code:$newPane -v
-       tmux send-keys -t code:$newPane.1 "$preferedShell" C-m
-       tmux send-keys -t code:$newPane.1 "cd `"$repoOpenPath`"" C-m
-       tmux resize-pane -t code:$newPane.1 -y 20
-       tmux send-keys -t code:$newPane.1 "clear" C-m
-       tmux select-pane -t code:$newPane.0
-   } elseif ($preferedShell -and $isWsl) {
-       wsl tmux split-window -t code:$newPane -v
-       wsl tmux send-keys -t code:$newPane.1 "$preferedShell" C-m
+       $existingPaneId = tmux display-message -p -t code:$windowIndex '#{pane_id}'
+       $newPaneId = tmux split-window -P -F '#{pane_id}' -t code:$windowIndex -v
+       tmux send-keys -t $newPaneId "$preferedShell" C-m
+       tmux send-keys -t $newPaneId "$cdCommand" C-m
+       tmux resize-pane -t $newPaneId -y 20
+       tmux send-keys -t $newPaneId "clear" C-m
+       tmux select-pane -t $existingPaneId
+    } elseif ($preferedShell -and $isWsl) {
+       $existingPaneId = wsl tmux display-message -p -t code:$windowIndex '#{pane_id}'
+       $newPaneId = wsl tmux split-window -P -F '#{pane_id}' -t code:$windowIndex -v
+       wsl tmux send-keys -t $newPaneId "$preferedShell" C-m
        if($preferedShell -eq "pwsh.exe") {
           Start-Sleep -Milliseconds 500
        }
-       wsl tmux send-keys -t code:$newPane.1 "cd `"$repoOpenPath`"" C-m
-       wsl tmux send-keys -t code:$newPane.1 "clear" C-m
-       wsl tmux resize-pane -t code:$newPane.1 -y 20
-       wsl tmux select-pane -t code:$newPane.0
-   }
+       wsl tmux send-keys -t $newPaneId "$cdCommand" C-m
+       wsl tmux send-keys -t $newPaneId "clear" C-m
+       wsl tmux resize-pane -t $newPaneId -y 20
+       wsl tmux select-pane -t $existingPaneId
+    }
 }
 
 $rerunWithThisRepoToOpen = $null
@@ -179,41 +264,61 @@ do {
       & $preferedShell
     } elseif($selectedOption -eq "nvim-wsl-tmux") {
        wsl tmux new-session -d -s code -n op -c $wslRepoDir
-       $cleanedRepoToOpen = Clean-ForBash $repoToOpen
-       [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $cleanedRepoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
+       [int]$targetWindowIndex = Get-NextTmuxWindowIndex "code" $true
+       $createdWindowIndexRaw = wsl tmux new-window -P -F '#{window_index}' -d -t code:$targetWindowIndex -n "$repoToOpen"
+       [int]$newWindowIndex = 0
+       if([string]::IsNullOrWhiteSpace($createdWindowIndexRaw) -or -not [int]::TryParse($createdWindowIndexRaw.Trim(), [ref]$newWindowIndex)) {
+           Write-Host "Failed to create tmux window for $repoToOpen"
+           continue
+       }
        [string]$wslRepoOpenPath = "$wslRepoDir/$repoToOpen"
-       wsl tmux send-keys -t code:$newPane "nvim $wslRepoOpenPath" C-m
+       [string]$mainPaneShell = Get-TmuxDefaultShell $true
+       [string]$mainPaneCdCommand = Get-ShellCdCommand $mainPaneShell $wslRepoOpenPath
+       wsl tmux send-keys -t code:$newWindowIndex "$mainPaneCdCommand" C-m
+       wsl tmux send-keys -t code:$newWindowIndex "nvim ." C-m
 
-       Start-TmuxShellPane $repoOpenPath $true
+       Start-TmuxShellPane $repoOpenPath $newWindowIndex $true
 
        Write-Host "Opening nvim in tmux session 'code'"
     } elseif($selectedOption -eq "nvim-win-tmux") {
        Update-Repo $repoOpenPath
        wsl tmux new-session -d -s code -n op -c $wslRepoDir
-       $cleanedRepoToOpen = Clean-ForBash $repoToOpen
-       [int]$newPane = wsl bash -c "tmux new-window -P -d -t code -n $cleanedRepoToOpen | cut -d' ' -f2 | cut -d':' -f2 | cut -d'.' -f1 "
-       wsl tmux send-keys -t code:$newPane "pwsh.exe" C-m
+       [int]$targetWindowIndex = Get-NextTmuxWindowIndex "code" $true
+       $createdWindowIndexRaw = wsl tmux new-window -P -F '#{window_index}' -d -t code:$targetWindowIndex -n "$repoToOpen"
+       [int]$newWindowIndex = 0
+       if([string]::IsNullOrWhiteSpace($createdWindowIndexRaw) -or -not [int]::TryParse($createdWindowIndexRaw.Trim(), [ref]$newWindowIndex)) {
+           Write-Host "Failed to create tmux window for $repoToOpen"
+           continue
+       }
+       [string]$mainPaneShell = "pwsh.exe"
+       [string]$mainPaneCdCommand = Get-ShellCdCommand $mainPaneShell $repoOpenPath
+       wsl tmux send-keys -t code:$newWindowIndex "pwsh.exe" C-m
        Start-Sleep 2
-       wsl tmux send-keys -t code:$newPane "cd `"$repoOpenPath`"" C-m
-       wsl tmux send-keys -t code:$newPane "nvim `"$repoOpenPath`"" C-m
+       wsl tmux send-keys -t code:$newWindowIndex "$mainPaneCdCommand" C-m
+       wsl tmux send-keys -t code:$newWindowIndex "nvim ." C-m
 
-       Start-TmuxShellPane $repoOpenPath $true
+       Start-TmuxShellPane $repoOpenPath $newWindowIndex $true
 
        Write-Host "Opening nvim in tmux session 'code'"
     } elseif($selectedOption -eq "nvim-tmux") {
        Update-Repo $repoOpenPath
        tmux new-session -d -s code -n op -c $wslRepoDir
-       [int]$paneCount = tmux list-windows -t code | wc -l
-       [int]$newPane = $paneCount
-       tmux new-window -t code:$newPane -n $repoToOpen
-       tmux send-keys -t code:$newPane "cd `"$repoOpenPath`"" C-m
-       tmux send-keys -t code:$newPane "nvim `"$repoOpenPath`"" C-m
-        
-       Start-TmuxShellPane $repoOpenPath
+       [int]$targetWindowIndex = Get-NextTmuxWindowIndex "code"
+       $createdWindowIndexRaw = tmux new-window -P -F '#{window_index}' -d -t code:$targetWindowIndex -n "$repoToOpen"
+       [int]$newWindowIndex = 0
+       if([string]::IsNullOrWhiteSpace($createdWindowIndexRaw) -or -not [int]::TryParse($createdWindowIndexRaw.Trim(), [ref]$newWindowIndex)) {
+           Write-Host "Failed to create tmux window for $repoToOpen"
+           continue
+       }
+       [string]$mainPaneShell = Get-TmuxDefaultShell
+       [string]$mainPaneCdCommand = Get-ShellCdCommand $mainPaneShell $repoOpenPath
+       tmux send-keys -t code:$newWindowIndex "$mainPaneCdCommand" C-m
+       tmux send-keys -t code:$newWindowIndex "nvim ." C-m
+         
+       Start-TmuxShellPane $repoOpenPath $newWindowIndex
 
        Write-Host "Opening nvim in tmux session 'code'"
     } else {
       Write-Output "No option selected"
     }
 } while($Continuous)
-
