@@ -13,7 +13,32 @@ $cloneKeyword = "<< Clone >>"
 $newRepoKeyword = "<< New Repo >>"
 
 $customEntries = $configFile.customEntries
+$customCommands = $configFile.customCommands
 $preferedShell = $configFile.preferedShell
+
+function Invoke-HereInPreferredShell {
+    param(
+        [string]$command,
+        [string]$location
+    )
+
+    if($preferedShell -eq "pwsh.exe") {
+        pwsh.exe -WorkingDirectory $location -NoExit -c "$command"
+    } elseif($preferedShell -eq "powershell.exe") {
+        powershell.exe -WorkingDirectory $location -NoExit -c "$command" 
+    } elseif($preferedShell -eq "pwsh") {
+        pwsh -WorkingDirectory $location -NoExit -c "$command"
+    } elseif($preferedShell -eq "bash") {
+        Set-Location $location
+        bash -i -c "$command || true; exec bash -i" -cd "$location"
+    } elseif($preferedShell -eq "zsh") {
+        Set-Location $location
+        zsh -i -c "$command || true; exec zsh -i" -cd "$location"
+    } else {
+        Set-Location $location
+        Invoke-Expression $command
+    }
+}
 
 function Update-Repo {
     param(
@@ -220,8 +245,6 @@ do {
 
     $solutionFile = Get-ChildItem $repoOpenPath/*.sln
 
-    $openCodeCommands = Get-Command opencode -ErrorAction SilentlyContinue
-
     $vsOption = if($IsWindows -and $solutionFile) { "vs" } else { $null }
     $nvimWinTmuxOption = if($IsWindows) { "nvim-win-tmux" } else { $null }
     $nvimWinWslTmuxOption = if($IsWindows) { "nvim-wsl-tmux" } else { $null }
@@ -229,7 +252,6 @@ do {
     $nvimWslOption = if($IsWindows) { "nvim-wsl" } else { $null }
     $nvimOption = if($IsLinux) { "nvim" } else { $null }
     $nvimTmuxOption = if($IsLinux) { "nvim-tmux" } else { $null }
-    $opencodeOption = if($openCodeCommands.Count -ne 0) { "opencode-here" } else { $null }
     $codeOption = if(-not $configFile.isServer) { "code" } else { $null }
     $runOptions = @(
         $nvimWinTmuxOption,
@@ -240,9 +262,9 @@ do {
         $nvimOption,
         $vsOption,
         $codeOption,
-        $opencodeOption,
         "cd-here"
     )
+    $runOptions += $customCommands | ForEach-Object { $_.name }
     $selectedOptions = $runOptions | Where-Object { $null -ne $_ }
     $selectedOption = $selectedOptions | fzf
 
@@ -256,9 +278,6 @@ do {
       wsl nvim $wslRepoDir/$repoToOpen
     } elseif($selectedOption -eq "code") {
       code $repoOpenPath
-    } elseif($selectedOption -eq "opencode-here") {
-      Set-Location $repoOpenPath
-      opencode
     } elseif($selectedOption -eq "cd-here") {
       Set-Location $repoOpenPath
       & $preferedShell
@@ -319,6 +338,25 @@ do {
 
        Write-Host "Opening nvim in tmux session 'code'"
     } else {
-      Write-Output "No option selected"
+      $commandFound = $false
+      foreach ($customCommand in $customCommands) {
+        if($customCommand.name -eq $selectedOption) {
+          $commandFound = $true
+          $commandToRun = $customCommand.command
+          $commandToRun = $commandToRun.Replace("{{path}}", "`"$repoOpenPath`"")
+
+          if($customCommand.runInPreferredShell -eq $false) {
+              Set-Location $repoOpenPath
+              Invoke-Expression $commandToRun
+              break
+          }
+
+          Invoke-HereInPreferredShell $commandToRun $repoOpenPath
+          break
+        }
+      }
+      if(-not $commandFound) {
+        Write-Output "No option selected"
+      }
     }
 } while($Continuous)
