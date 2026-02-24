@@ -3,6 +3,69 @@ param(
     [switch]$NoRepoUpdate
 )
 
+if($IsLinux) {
+    $nativeDir = Join-Path $PSScriptRoot "native"
+    $nativeExecutable = Join-Path $nativeDir "main"
+    $nativeCommitHashFile = Join-Path $nativeDir ".build-commit-hash"
+
+    $currentCommitHash = $null
+    $storedCommitHash = $null
+    $shouldBuildNative = $false
+
+    if(Test-Path $nativeCommitHashFile) {
+        $storedCommitHash = (Get-Content $nativeCommitHashFile -Raw).Trim()
+    }
+
+    $currentCommitHashRaw = git -C $PSScriptRoot rev-parse HEAD 2>$null
+    if($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($currentCommitHashRaw)) {
+        $currentCommitHash = $currentCommitHashRaw.Trim()
+    }
+
+    if(-not (Test-Path $nativeExecutable)) {
+        $shouldBuildNative = $true
+    } elseif([string]::IsNullOrWhiteSpace($storedCommitHash)) {
+        $shouldBuildNative = $true
+    } elseif([string]::IsNullOrWhiteSpace($currentCommitHash)) {
+        $shouldBuildNative = $true
+    } elseif($storedCommitHash -ne $currentCommitHash) {
+        $shouldBuildNative = $true
+    }
+
+    if($shouldBuildNative) {
+        Write-Host "Compiling native launcher..."
+        make -C $nativeDir
+
+        if($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($currentCommitHash)) {
+            Set-Content -Path $nativeCommitHashFile -Value $currentCommitHash -NoNewline
+        }
+    }
+
+    $nativeIsReady = Test-Path $nativeExecutable
+    if($nativeIsReady -and -not [string]::IsNullOrWhiteSpace($currentCommitHash)) {
+        $latestStoredCommitHash = $null
+        if(Test-Path $nativeCommitHashFile) {
+            $latestStoredCommitHash = (Get-Content $nativeCommitHashFile -Raw).Trim()
+        }
+
+        if([string]::IsNullOrWhiteSpace($latestStoredCommitHash) -or $latestStoredCommitHash -ne $currentCommitHash) {
+            $nativeIsReady = $false
+        }
+    }
+
+    if($nativeIsReady) {
+        $nativeArgs = @()
+        if($Continuous) {
+            $nativeArgs += "--continuous"
+        }
+        if($NoRepoUpdate) {
+            $nativeArgs += "--no-repo-update"
+        }
+
+        & $nativeExecutable @nativeArgs
+        exit $LASTEXITCODE
+    }
+}
+
 $configFileRaw = Get-Content $PSScriptRoot/config.json -Raw
 $configFile = $configFileRaw | ConvertFrom-Json
 
@@ -221,7 +284,7 @@ do {
     }
 
     [string]$repoToOpen = if([string]::IsNullOrWhitespace($rerunWithThisRepoToOpen)) {
-        $options | fzf
+        $options | fzf --prompt "op > "
     } else {
         $tmp = $rerunWithThisRepoToOpen
         $rerunWithThisRepoToOpen = $null
