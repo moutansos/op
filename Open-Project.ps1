@@ -264,7 +264,9 @@ function Get-TmuxWindowProjectTarget($projectTargets, $isWsl = $false) {
         return $null
     }
 
-    if([string]::IsNullOrWhiteSpace($env:TMUX)) {
+    $notRunningInTmuxDirectly = [string]::IsNullOrWhiteSpace($env:TMUX)
+    $notRunningInTmuxViaWsl = $isWsl -and [string]::IsNullOrWhiteSpace($(wsl --exec tmux display-message -p '#{session_name}' 2>$null))
+    if($notRunningInTmuxDirectly -and $notRunningInTmuxViaWsl) {
         return $null
     }
 
@@ -276,6 +278,10 @@ function Get-TmuxWindowProjectTarget($projectTargets, $isWsl = $false) {
 
     if([string]::IsNullOrWhiteSpace($windowNameRaw)) {
         return $null
+    }
+
+    if ($isWsl) {
+        Read-Host "WARNING: Running inside WSL we are unable to reliably determine if you are in tmux or a regular shell. If using a regular shell exit now and provide the -NoTarget flag. Press enter to continue"
     }
 
     $windowName = $windowNameRaw.Trim()
@@ -323,6 +329,7 @@ function Start-TmuxShellPane($repoOpenPath, $windowIndex, $isWsl = $false) {
 $rerunWithThisRepoToOpen = $null
 $appliedTmuxTarget = $NoTarget.IsPresent
 do {
+    $runningWsl = -not $IsLinux -and (Get-Command wsl -ErrorAction SilentlyContinue) -and -not [string]::IsNullOrWhiteSpace($(wsl --exec echo hello 2>$null))
     [string[]]$repoOptions = @((Get-ChildItem $repoDir).Name)
     [string[]]$projectTargets = @($repoOptions + [string[]]($customEntries.name))
     $options = @($repoOptions)
@@ -335,7 +342,7 @@ do {
     }
 
     if(-not $Continuous -and -not $appliedTmuxTarget -and [string]::IsNullOrWhitespace($rerunWithThisRepoToOpen)) {
-        $tmuxTargetRepo = Get-TmuxWindowProjectTarget $projectTargets
+        $tmuxTargetRepo = Get-TmuxWindowProjectTarget $projectTargets $runningWsl
         if(-not [string]::IsNullOrWhiteSpace($tmuxTargetRepo)) {
             $rerunWithThisRepoToOpen = $tmuxTargetRepo
         }
@@ -375,7 +382,6 @@ do {
         continue
     }
 
-
     $customOptionsSelected = $customEntries | Where-Object { $_.name -eq $repoToOpen }
     if($customOptionsSelected) {
       if($IsWindows) {
@@ -387,7 +393,7 @@ do {
           break
       }
     } else {
-      $repoOpenPath = "$repoDir/$repoToOpen"
+      $repoOpenPath = "$repoDir/$trimmedRepoToOpen"
     }
 
     $solutionFile = Get-ChildItem $repoOpenPath/*.sln
