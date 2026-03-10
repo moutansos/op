@@ -1,9 +1,22 @@
 param(
     [switch]$Continuous,
-    [switch]$NoRepoUpdate
+    [switch]$NoRepoUpdate,
+    [switch]$NoTarget,
+    [switch]$ForceNative,
+    [switch]$ForcePowerShell
 )
 
-if($IsLinux) {
+if($ForceNative -and $ForcePowerShell) {
+    Write-Error "You cannot pass both -ForceNative and -ForcePowerShell."
+    exit 1
+}
+
+if($ForceNative -and -not $IsLinux) {
+    Write-Error "-ForceNative is currently only supported on Linux."
+    exit 1
+}
+
+if($IsLinux -and -not $ForcePowerShell) {
     $nativeDir = Join-Path $PSScriptRoot "native"
     $nativeExecutable = Join-Path $nativeDir "main"
     $nativeCommitHashFile = Join-Path $nativeDir ".build-commit-hash"
@@ -60,9 +73,17 @@ if($IsLinux) {
         if($NoRepoUpdate) {
             $nativeArgs += "--no-repo-update"
         }
+        if($NoTarget) {
+            $nativeArgs += "--no-target"
+        }
 
         & $nativeExecutable @nativeArgs
         exit $LASTEXITCODE
+    }
+
+    if($ForceNative) {
+        Write-Error "Native mode was forced, but native executable is unavailable or out of date and could not be built."
+        exit 1
     }
 }
 
@@ -238,6 +259,33 @@ function Ensure-TmuxSession($sessionName, $startDirectory, $isWsl = $false) {
     }
 }
 
+function Get-TmuxWindowProjectTarget($projectTargets, $isWsl = $false) {
+    if($null -eq $projectTargets -or $projectTargets.Count -eq 0) {
+        return $null
+    }
+
+    if([string]::IsNullOrWhiteSpace($env:TMUX)) {
+        return $null
+    }
+
+    if($isWsl) {
+        $windowNameRaw = wsl --exec tmux display-message -p '#{window_name}' 2>$null
+    } else {
+        $windowNameRaw = tmux display-message -p '#{window_name}' 2>$null
+    }
+
+    if([string]::IsNullOrWhiteSpace($windowNameRaw)) {
+        return $null
+    }
+
+    $windowName = $windowNameRaw.Trim()
+    if($projectTargets -contains $windowName) {
+        return $windowName
+    }
+
+    return $null
+}
+
 function Start-TmuxShellPane($repoOpenPath, $windowIndex, $isWsl = $false) {
    $pathToCd = $repoOpenPath
 
@@ -273,14 +321,25 @@ function Start-TmuxShellPane($repoOpenPath, $windowIndex, $isWsl = $false) {
 }
 
 $rerunWithThisRepoToOpen = $null
+$appliedTmuxTarget = $NoTarget.IsPresent
 do {
-    $options = (Get-ChildItem $repoDir).Name
+    [string[]]$repoOptions = @((Get-ChildItem $repoDir).Name)
+    [string[]]$projectTargets = @($repoOptions + [string[]]($customEntries.name))
+    $options = @($repoOptions)
     $options += $cloneKeyword
     $options += $newRepoKeyword
     $options += [string[]]($customEntries.name)
 
     if($Continuous) {
       $options += $exitKeyword
+    }
+
+    if(-not $Continuous -and -not $appliedTmuxTarget -and [string]::IsNullOrWhitespace($rerunWithThisRepoToOpen)) {
+        $tmuxTargetRepo = Get-TmuxWindowProjectTarget $projectTargets
+        if(-not [string]::IsNullOrWhiteSpace($tmuxTargetRepo)) {
+            $rerunWithThisRepoToOpen = $tmuxTargetRepo
+        }
+        $appliedTmuxTarget = $true
     }
 
     [string]$repoToOpen = if([string]::IsNullOrWhitespace($rerunWithThisRepoToOpen)) {

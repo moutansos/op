@@ -103,6 +103,22 @@ static void vec_free(StringVec *vec) {
   vec->capacity = 0;
 }
 
+static int vec_contains(const StringVec *vec, const char *value) {
+  size_t i;
+
+  if (!vec || !value) {
+    return 0;
+  }
+
+  for (i = 0; i < vec->count; ++i) {
+    if (vec->items[i] && strcmp(vec->items[i], value) == 0) {
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
 static int compare_strings(const void *left, const void *right) {
   const char *a = *(const char *const *)left;
   const char *b = *(const char *const *)right;
@@ -976,6 +992,31 @@ static char *get_tmux_default_shell(void) {
   return output;
 }
 
+static char *get_tmux_current_window_name(void) {
+  const char *tmux_env = getenv("TMUX");
+  char *const argv[] = {"tmux", "display-message", "-p", "#{window_name}", NULL};
+  int status = 0;
+  char *output;
+
+  if (!tmux_env || tmux_env[0] == '\0') {
+    return NULL;
+  }
+
+  output = capture_command_output(NULL, argv, &status);
+  if (!output || status != 0) {
+    free(output);
+    return NULL;
+  }
+
+  trim_trailing_newline(output);
+  if (output[0] == '\0') {
+    free(output);
+    return NULL;
+  }
+
+  return output;
+}
+
 static char *tmux_capture_single_line(const char *target, const char *format,
                                       const char *subcommand) {
   char *const argv[] = {"tmux", (char *)subcommand, "-P", "-F", (char *)format,
@@ -1211,7 +1252,7 @@ static int execute_named_command(const char *command_template, bool run_in_prefe
 
 static int usage(const char *prog) {
   fprintf(stderr,
-          "Usage: %s [--continuous|-c] [--no-repo-update]\n",
+          "Usage: %s [--continuous|-c] [--no-repo-update] [--no-target]\n",
           prog ? prog : "op-native");
   return 1;
 }
@@ -1219,6 +1260,8 @@ static int usage(const char *prog) {
 int main(int argc, char **argv) {
   bool continuous = false;
   bool no_repo_update = false;
+  bool no_target = false;
+  bool attempted_tmux_window_target = false;
   int argi;
 
   char *executable_path = NULL;
@@ -1236,6 +1279,8 @@ int main(int argc, char **argv) {
       continuous = true;
     } else if (strcmp(argv[argi], "--no-repo-update") == 0) {
       no_repo_update = true;
+    } else if (strcmp(argv[argi], "--no-target") == 0) {
+      no_target = true;
     } else if (strcmp(argv[argi], "--help") == 0 ||
                strcmp(argv[argi], "-h") == 0) {
       return usage(argv[0]);
@@ -1345,6 +1390,22 @@ int main(int argc, char **argv) {
     if (continuous && !vec_push(&options, EXIT_KEYWORD)) {
       fprintf(stderr, "Out of memory\n");
       goto loop_cleanup;
+    }
+
+    if (!continuous && !no_target && !attempted_tmux_window_target &&
+        !rerun_with_repo) {
+      char *tmux_window_name = get_tmux_current_window_name();
+      attempted_tmux_window_target = true;
+
+      if (tmux_window_name && strcmp(tmux_window_name, CLONE_KEYWORD) != 0 &&
+          strcmp(tmux_window_name, NEW_REPO_KEYWORD) != 0 &&
+          strcmp(tmux_window_name, EXIT_KEYWORD) != 0 &&
+          vec_contains(&options, tmux_window_name)) {
+        rerun_with_repo = tmux_window_name;
+        tmux_window_name = NULL;
+      }
+
+      free(tmux_window_name);
     }
 
     if (rerun_with_repo && rerun_with_repo[0] != '\0') {
