@@ -350,10 +350,11 @@ do {
         $tmp
     }
 
-    $trimmedRepoToOpen = $repoToOpen.Trim()
     if(-not $repoToOpen) {
       continue
-    } elseif($trimmedRepoToOpen -eq $exitKeyword) {
+    }
+    $trimmedRepoToOpen = $repoToOpen.Trim()
+    if($trimmedRepoToOpen -eq $exitKeyword) {
       break
     } elseif($trimmedRepoToOpen -eq $cloneKeyword) {
       $repoToClone = Read-Host "Enter the repo to clone:"
