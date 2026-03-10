@@ -264,9 +264,8 @@ function Get-TmuxWindowProjectTarget($projectTargets, $isWsl = $false) {
         return $null
     }
 
-    $notRunningInTmuxDirectly = [string]::IsNullOrWhiteSpace($env:TMUX)
-    $notRunningInTmuxViaWsl = $isWsl -and [string]::IsNullOrWhiteSpace($(wsl --exec tmux display-message -p '#{session_name}' 2>$null))
-    if($notRunningInTmuxDirectly -and $notRunningInTmuxViaWsl) {
+    $runningInTmuxDirectly = -not [string]::IsNullOrWhiteSpace($env:TMUX)
+    if(-not $runningInTmuxDirectly) {
         return $null
     }
 
@@ -280,9 +279,13 @@ function Get-TmuxWindowProjectTarget($projectTargets, $isWsl = $false) {
         return $null
     }
 
-    if ($isWsl) {
-        Read-Host "WARNING: Running inside WSL we are unable to reliably determine if you are in tmux or a regular shell. If using a regular shell exit now and provide the -NoTarget flag. Press enter to continue"
-    }
+    #If tmux is running and we can't find the TMUX var, we might be running inside WSL and just
+    #have no idea. We have to warn the user that we are going to use the active tmux window as a
+    #target.
+    # if ($isWsl -and $notRunningInTmuxDirectly) {
+    #     Write-Host "WARNING: Running inside WSL we are unable to reliably determine if you are in tmux or a regular shell."
+    #     Read-Host "If using a regular shell exit now and provide the -NoTarget flag. You can also set the following in your .bashrc or .zshrc: 'export WSLENV=`$WSLENV:TMUX' Press enter to continue"
+    # }
 
     $windowName = $windowNameRaw.Trim()
     if($projectTargets -contains $windowName) {
