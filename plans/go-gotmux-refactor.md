@@ -86,7 +86,7 @@ Use these defaults unless implementation work establishes a concrete reason to c
 
 1. Run the tmux-owning Go binary on Linux or inside WSL, in the same environment as the tmux
    executable. Do not recreate the PowerShell pattern of driving WSL tmux from a Windows-host
-   process.
+   process. Make sure op remains accessible on the command line in windows.
 2. Keep `code` as the default session name and `op` as the dashboard window name, but make both
    configurable.
 3. Keep the existing config file usable. Add canonical nested Go configuration while accepting the
@@ -94,9 +94,10 @@ Use these defaults unless implementation work establishes a concrete reason to c
 4. Treat project opening and cloning as application use cases shared by the TUI, CLI, and HTTP
    server. Front ends must not implement their own git or tmux flows.
 5. Preserve local custom commands, but do not expose arbitrary command execution through the remote
-   API.
+   API unless configured as a global command.
 6. Default the API to `127.0.0.1` and recommend SSH port forwarding for remote access. Non-loopback
-   listening requires authentication and TLS configuration.
+   listening requires authentication and TLS configuration. Provide a flag for specifying the host,
+   port, and optionally an API key.
 7. Use asynchronous jobs for clone operations because they can exceed normal HTTP request timeouts.
 8. Cut over to Go as soon as parity exists, not after every feature is built. Phases 1 through 4 are
    the cutover; statistics and the remote server are post-cutover work on a single codebase. The
@@ -132,6 +133,13 @@ front-loads the gotmux adapter risks below into the first weeks of work rather t
 - If an existing `code` session predates the Go migration, reconciliation creates the dashboard
   window if missing and moves it to the configured base index without deleting or replacing user
   windows.
+- Expected behavior on run of `op` outside: it should ask a project to start/attach to and then
+  switch the current terminal session to attach to the `code` session and switch the session to the
+  selected project.
+- Expected behavior on run on `op` inside a project window: it should run the command runner, which
+  should read the configuration and pull in the commands to be run in the current terminal pane.
+  Examples of the actions could be to start opencode, cd the shell to the project directory, open
+  neovim, open claude code, etc. These will be configurable by the user in the config file.
 
 ### Dashboard Layout
 
@@ -161,6 +169,8 @@ Use a responsive Bubble Tea layout:
   message rather than malformed output.
 - Quitting or detaching the client must not accidentally kill project windows. Dashboard process
   failure is reported by reconciliation and can be respawned.
+- be cognizant of the wdith of the screen. If things get too tight move to a tabbed layout
+  switchable with keyboard shortcuts
 
 ### Project Window
 
@@ -353,6 +363,7 @@ Rules enforced in the service layer:
   concurrent API requests.
 - Clone uses a temporary sibling directory and an atomic rename where practical so incomplete
   repositories do not appear as valid projects.
+  - NOTE: This method is overkill. If something fails to clone that's fine. Just report the failure
 - Window names are normalized for tmux and disambiguated without changing the stable project ID.
 - Git pulls occur only when enabled and the worktree is clean, using `git status --porcelain` rather
   than localized human output.
@@ -536,6 +547,8 @@ op remote open <project-id> [--profile default]
 op remote job <job-id>
 ```
 
+Include a generated swagger doc and interface exposed at runtime.
+
 ### Security
 
 `POST /v1/projects/{id}/open` starts config-defined commands — an editor and an interactive shell —
@@ -546,18 +559,14 @@ listener defaults to loopback. State it plainly in the README rather than implyi
 API is a safe one.
 
 - Bind to loopback by default.
-- Require a bearer token loaded from `OP_API_TOKEN` or a permission-restricted token file. Do not
-  store a real token in the checked-in JSON config.
-- Require TLS for configured non-loopback listeners, or fail startup with an actionable error.
-- Apply request body limits, strict JSON decoding, content-type checks, server read/write/idle
-  timeouts, and bounded concurrent jobs.
+- Require a bearer token loaded from `OP_API_TOKEN` or a the config file.
+- Apply strict JSON decoding, content-type checks, server read/write/idle timeouts, and bounded
+  concurrent jobs.
 - Validate clone URL schemes and project names. Reject destination paths, shell commands, tmux
   targets, and arbitrary environment variables from remote callers.
 - Use constant-time token comparison and redact authorization data, clone credentials, and URL user
   info from structured logs.
 - Keep local custom command execution out of the HTTP API.
-- Include audit fields for request ID, authenticated subject label, operation, project ID, job ID,
-  result, and duration.
 
 ## Configuration
 
@@ -827,13 +836,16 @@ Exit criteria: the full acceptance list passes end to end and the release build 
 These do not block the foundation, but should be confirmed before finalizing phases 4 through 6:
 
 1. Process scope: default to tmux-owned pane process trees, with an optional host-top view later.
-2. Remote transport: default to bearer-authenticated HTTP over an SSH tunnel; direct LAN/WAN
-   exposure requires TLS.
+
+- No need for host process view. Host cpu, memory etc. that's aggregated would be useful
+
+2. Remote transport: default to bearer-authenticated HTTP. We expect to be on a secure internal
+   network only
 3. Duplicate open behavior: select an existing project window unless the caller explicitly requests
    a new instance.
 4. Default project profile: preserve `nvim` plus a 20-row preferred-shell pane.
 5. Platform scope: run the full application in Linux/WSL beside tmux rather than controlling WSL
-   tmux from a native Windows process.
+   tmux from a native Windows process. Make sure the op command still works in windows
 6. gotmux disposition: start with the pinned upstream release plus the adapter hardening above.
    Revisit vendoring or forking if the workarounds keep growing, since several of the limitations
    are library bugs rather than missing features.
