@@ -2,6 +2,10 @@
 
 Status: proposed
 
+The gotmux claims in this plan were verified empirically against `gotmux v0.5.0` and `tmux 3.4` on
+Linux, not read from documentation. Findings that contradict the library's apparent API are marked
+**Verified** and must not be "simplified" back to the obvious-looking call.
+
 ## Objective
 
 Replace the C and PowerShell implementations with one Go binary that:
@@ -45,6 +49,37 @@ The migration needs to account for behavior currently split across two implement
 - The PowerShell path supports more Windows and WSL launch variants than the C path. The Go runtime
   target must be made explicit instead of retaining two divergent behavior sets.
 
+### Existing behavior this plan must explicitly keep, replace, or retire
+
+These are implemented today and were previously unaddressed. Each needs a decision, not silent
+omission:
+
+- **Window-name project targeting** (`Open-Project.ps1:262` `Get-TmuxWindowProjectTarget`, mirrored
+  in `native/main.c`). Running `op` from inside a tmux window whose name matches a project skips
+  selection and targets that project. This is the newest feature in the tree (commit `e3bddfc`) and
+  must survive. In the Go model, `op` run from inside a project window should act on that project
+  directly. `--no-target` exists only because WSL cannot reliably detect whether it is inside tmux
+  (commits `929b81f`, `2f2f2e0`); running the binary beside tmux should retire the flag's reason to
+  exist.
+- **`--continuous` and the `<< Exit >>` keyword**. Both implementations support a loop mode that
+  re-prompts after each action. The dashboard subsumes this; the flag is retired rather than ported.
+- **Custom command placeholders**. `{{path}}` (`Open-Project.ps1:502`) and `{{oproot}}`
+  (`Open-Project.ps1:117`) are substituted before execution, and `runInPreferredShell` selects
+  between direct execution and a wrapped interactive shell. All three must be preserved by the
+  config migration and are currently absent from the target config shape.
+- **`customEntries[].paths` contain PowerShell expressions**, not plain paths. The shipped example
+  uses `"$env:LOCALAPPDATA/nvim"` and is resolved with `Invoke-Expression`. A generic `${VAR}`
+  expander will not parse `$env:NAME`; migration needs an explicit translation rule.
+- **`isServer` only gates the VS Code action** (`Open-Project.ps1:411`). It means "headless host, do
+  not offer GUI editors" and has nothing to do with the new HTTP server. Reusing the word `server`
+  for both is a naming collision to avoid.
+- **`cd-here` and `vs`** are host-shell and GUI behaviors. `cd-here` changes the invoking shell's
+  working directory, which a dashboard running inside a tmux pane cannot do; it must become "open a
+  shell pane here". `vs` opens a discovered `.sln` on Windows and is out of scope for a Linux/WSL
+  runtime.
+- The existing `config.example.json` has no `customCommands` key even though both implementations
+  read it.
+
 ## Scope Decisions
 
 Use these defaults unless implementation work establishes a concrete reason to change them:
@@ -63,6 +98,23 @@ Use these defaults unless implementation work establishes a concrete reason to c
 6. Default the API to `127.0.0.1` and recommend SSH port forwarding for remote access. Non-loopback
    listening requires authentication and TLS configuration.
 7. Use asynchronous jobs for clone operations because they can exceed normal HTTP request timeouts.
+8. Cut over to Go as soon as parity exists, not after every feature is built. Phases 1 through 4 are
+   the cutover; statistics and the remote server are post-cutover work on a single codebase. The
+   stated problem is two divergent implementations and a PowerShell dependency on Linux — carrying
+   three implementations while building a dashboard, a metrics collector, and an HTTP API would
+   extend exactly the condition this rewrite exists to end.
+
+### Cutover MVP
+
+The minimum that justifies deleting the C and PowerShell code:
+
+- Config load and migration, project catalog, git operations, worktree creation (Phases 1-2).
+- gotmux session and project-window management (Phase 3).
+- A dashboard with in-process fuzzy selection and the core actions, with no statistics panel and no
+  server (a reduced Phase 4).
+
+Everything else — process statistics, `op serve`, the remote client — lands afterward. This also
+front-loads the gotmux adapter risks below into the first weeks of work rather than the last.
 
 ## Target User Experience
 
@@ -71,7 +123,8 @@ Use these defaults unless implementation work establishes a concrete reason to c
 - Running `op` initializes dependencies, loads configuration, and ensures the main tmux session
   exists.
 - On first creation, the session's first window is named `op`, starts in the repository root, and
-  runs `op dashboard` as its first pane command.
+  runs `op dashboard` in its first pane. The command is sent to the pane after creation rather than
+  passed as the session's shell command; see the verified gotmux limitations below.
 - If `op` is run outside tmux, it attaches to `code` after reconciliation.
 - If `op` is run inside tmux, it switches the current client to `code` rather than nesting tmux.
 - Reconciliation is idempotent. Repeated starts do not create duplicate dashboard windows or project
@@ -186,6 +239,72 @@ key sending. Keep all compatibility handling in `internal/tmux`. Where the typed
 a needed flag or operation, use `Tmux.Command` as the single escape hatch rather than calling
 `exec.Command("tmux", ...)` elsewhere.
 
+### Verified gotmux v0.5.0 limitations
+
+Confirmed by running gotmux v0.5.0 against tmux 3.4 on an isolated socket. Three of these five fail
+**silently** — they return `nil` errors and plausible objects while doing nothing — so the adapter
+cannot trust gotmux return values as evidence that an operation happened.
+
+1. **`ShellCommand` is broken for any multi-word command.** gotmux wraps the value as
+   `fmt.Sprintf("'%s'", cmd)` and passes it through `exec.Command`, with no shell to strip the
+   quotes. tmux receives a literal `'op dashboard'`, runs `sh -c "'op dashboard'"`, and searches for
+   a binary whose name contains a space. The pane dies immediately and takes the session with it.
+   Because `-P` prints before the pane dies, `NewSession` returns a non-nil `*Session` and a `nil`
+   error. Observed:
+
+   ```text
+   NewSession(ShellCommand: "sleep 300")  -> err=<nil>, session non-nil, NO session created
+   NewSession(ShellCommand: "zsh")        -> err=<nil>, session created
+   SplitWindow(ShellCommand: "sleep 300") -> err=<nil>, NO pane created
+   ```
+
+   Single-token commands work. The current split-pane behavior works only because `preferedShell` is
+   one word. Any profile command such as `nvim .` silently no-ops.
+
+2. **A `-:-` sequence in any format value panics the process.** gotmux joins format variables with a
+   `-:-` separator and calls `log.Panicln("invalid query output")` on a field-count mismatch —
+   inside the library, not as a returned error. A window named `we-:-ird` panics `Session.NewWindow`
+   before it returns. Window names derive from directory names under `repoDirectory`, so this is
+   reachable from ordinary user input, and any embedded newline in a pane title or path does the
+   same. Every list and get call routes through the same `collect()`.
+
+3. **`NewTmux(socketPath)` fails when no server is running on that socket.** It validates by running
+   `list-clients`, which errors with "no server running". A configured `tmux.socket` therefore
+   cannot bootstrap its own server, and integration tests must start a server on the socket before
+   constructing the client.
+
+4. **Missing operations.** There is no `resize-pane` and no `respawn-pane` in the v0.5.0 API, both
+   of which this plan requires. `Window.Move` emits `move-window` without `-k` and errors when the
+   target index is occupied.
+
+5. **Errors carry no diagnostics.** Every call uses `.Output()`, discarding stderr, and returns a
+   fixed string such as `errors.New("failed to create window")`. `Tmux.Command` does the same. The
+   typed-error goal cannot be built on top of gotmux error values.
+
+Two smaller confirmed behaviors: `Option.Value` returns with a trailing newline (`"dashboard\n"`),
+and `Session.Attach()` with nil options leaves stdout unset so the attach fails — always pass
+`AttachSessionOptions{Output: os.Stdout, Error: os.Stderr}`. `checkSessionName` rejects `:` and `.`,
+so the configurable session name must be validated at config load rather than at first use.
+
+### Required adapter hardening
+
+`internal/tmux` carries more weight than a thin type wrapper. It must:
+
+- **Verify after every mutation.** Re-query for the session, window, or pane and confirm it exists
+  and is not dead. A `nil` error from gotmux is not evidence of success. This is the single most
+  important rule in the adapter.
+- **Use `ShellCommand` only for single-token commands.** Everything else goes through the
+  send-literal-then-Enter helper or `Tmux.Command`.
+- **Sanitize names** before they reach tmux: reject or rewrite `-:-`, newlines, `:`, and `.`.
+- **Wrap every gotmux call in a `recover()` barrier** that converts a library panic into a typed
+  error. A panic in a list call would otherwise kill the dashboard or the server process.
+- **Shell out directly where error detail matters**, capturing stderr, rather than surfacing
+  gotmux's fixed error strings.
+- **Trim option values** on read.
+
+If this hardening grows past a comfortable size, vendoring or forking gotmux becomes the cheaper
+option; the adapter boundary is what keeps that a local decision.
+
 ## Core Domain and Service API
 
 Define stable request and result types before building front ends:
@@ -256,15 +375,27 @@ implementation uses:
 
 ### Main Session Reconciliation
 
-1. Validate that tmux is installed and gotmux can initialize.
-2. Look up the configured session.
-3. If absent, create it detached with `SessionOptions{Name, StartDirectory, ShellCommand}` so the
-   first pane starts `op dashboard` directly.
-4. Rename the first window to `op` and tag it with a tmux user option such as `@op-role=dashboard`.
-5. If the session exists, locate the dashboard by the user option first and name second.
-6. Create or respawn a missing or dead dashboard pane, then place its window at the base index.
-7. Never delete unrelated windows during reconciliation.
-8. Attach or switch the caller's client only after reconciliation succeeds.
+1. Validate that tmux is installed and that the session name passes `checkSessionName` constraints.
+2. Initialize the client. With a configured `tmux.socket`, `NewTmux` fails when no server is running
+   there, so start the server first (`tmux -S <path> new-session -d`) and then construct the client.
+   `DefaultTmux` has no such problem.
+3. Look up the configured session.
+4. If absent, create it detached with `SessionOptions{Name, StartDirectory}` and **no**
+   `ShellCommand` — `op dashboard` is multi-word and would silently destroy the session (see
+   verified limitation 1). Create the session with a plain shell, then start the dashboard in the
+   first pane with the send-literal-plus-Enter helper.
+5. Re-query the session and confirm it exists before continuing. `NewSession` reports success for
+   sessions that were never created.
+6. Rename the first window to `op` and tag it with a tmux user option such as `@op-role=dashboard`.
+7. If the session exists, locate the dashboard by the user option first and name second. Trim the
+   trailing newline from option values before comparing.
+8. Create or respawn a missing or dead dashboard pane via `Tmux.Command("respawn-pane", ...)`, then
+   place its window at the base index. `Window.Move` fails when that index is occupied, so handle
+   the occupied case explicitly with `swap-window` or by leaving the window where it is rather than
+   treating the error as fatal.
+9. Never delete unrelated windows during reconciliation.
+10. Attach or switch the caller's client only after reconciliation succeeds. Attach through
+    `AttachSession` with explicit `Output`/`Error` writers.
 
 Do not manually calculate the next free tmux index for normal project creation. Let tmux allocate it
 through `Session.NewWindow`, then use the returned `Window` identity. Query the base index only when
@@ -272,21 +403,25 @@ positioning the dashboard window.
 
 ### Project Window Creation
 
-1. Resolve and validate the project.
+1. Resolve and validate the project, and normalize its display name for tmux.
 2. Check for an existing window tagged with `@op-project-id=<id>`.
 3. Create the window detached with its starting directory and final display name.
 4. Get its initial pane and start the editor with the adapter's literal-send-plus-Enter helper
-   because gotmux v0.5.0 does not expose a shell command on `NewWindowOptions`.
-5. Split from that pane with `SplitWindowOptions{SplitDirection, StartDirectory, ShellCommand}` for
-   the preferred shell.
-6. Refresh the pane list, identify the new pane, resize it, and reselect the editor pane.
+   because gotmux v0.5.0 does not expose a shell command on `NewWindowOptions`, and because the
+   default `nvim .` is multi-word and cannot use `ShellCommand` anyway.
+5. Split from that pane with `SplitWindowOptions{SplitDirection, StartDirectory}`. Pass
+   `ShellCommand` only when the configured preferred shell is a single token; otherwise split with
+   the default shell and send the command. Then re-list the panes and confirm the split actually
+   happened — a failed multi-word split returns `nil`.
+6. Identify the new pane, resize it with `Tmux.Command("resize-pane", "-t", id, "-y", rows)` because
+   gotmux exposes no resize operation, and reselect the editor pane.
 7. Set tmux user options that record project ID, path, profile, and ownership.
 8. On partial failure, remove only the window created by this operation and return a typed setup
    error.
 
-gotmux's `Pane.SendKeys` does not add Enter in v0.5.0. Prefer `ShellCommand` where gotmux exposes
-it, such as session and split-pane creation. For a new window's initial pane, encapsulate literal
-text and Enter as separate gotmux operations in the adapter.
+gotmux's `Pane.SendKeys` does not add Enter in v0.5.0, so the adapter encapsulates literal text and
+Enter as separate operations. `ShellCommand` is not the preferred path despite appearing to be the
+structured one: it is unusable for multi-word commands and fails without an error.
 
 ## TUI Implementation
 
@@ -344,6 +479,11 @@ Sampling details:
 
 - Build CPU deltas across snapshots; the first sample may show unavailable values rather than
   misleading zeroes.
+- Compute CPU percentage from `Process.Times()` deltas kept by the collector, or retain the
+  `*process.Process` objects between samples. Calling `Percent(0)` on a freshly constructed process
+  returns the since-boot average, which is the usual source of wrong numbers in this kind of panel.
+- `Pane.Pid` is the pane's shell PID, not the foreground command's, so the aggregate must walk
+  descendants to be meaningful.
 - Bound descendant traversal and tolerate permission errors and processes disappearing between
   calls.
 - Collect off the Bubble Tea update loop and publish one immutable snapshot message.
@@ -379,8 +519,13 @@ Start with a versioned JSON API:
 | `POST` | `/v1/projects/{id}/worktrees` | Create a branch and sibling worktree         |
 
 Return `202 Accepted` and a job resource for clone and worktree operations. Return the selected or
-created window identity for open operations. Support an `Idempotency-Key` header on mutating
-requests and retain bounded job metadata long enough for retries.
+created window identity for open operations.
+
+For v1, keep the concurrency story small: a single-flight lock per project ID and in-memory job
+state are sufficient for a single-user tool where `op serve` is the only writer. `Idempotency-Key`
+handling, bounded job retention for retries, and the filesystem lock files described above are only
+warranted once the dashboard and the server actually run as separate writing processes. Add them
+when that happens, not before.
 
 Add non-interactive client commands so remote control does not require handwritten curl calls:
 
@@ -392,6 +537,13 @@ op remote job <job-id>
 ```
 
 ### Security
+
+`POST /v1/projects/{id}/open` starts config-defined commands — an editor and an interactive shell —
+in a pane on the host. That is remote code execution by design, and no amount of input validation
+changes it; the validation below narrows the blast radius but does not make the endpoint safe to
+expose. This is acceptable for a personal tool reached over an SSH tunnel, and it is the reason the
+listener defaults to loopback. State it plainly in the README rather than implying that a validated
+API is a safe one.
 
 - Bind to loopback by default.
 - Require a bearer token loaded from `OP_API_TOKEN` or a permission-restricted token file. Do not
@@ -433,10 +585,17 @@ Move toward this shape while loading current files during migration:
     "tlsCertFile": "",
     "tlsKeyFile": ""
   },
+  "actions": {
+    "guiEditors": false
+  },
   "customEntries": [],
   "customCommands": []
 }
 ```
+
+`actions.guiEditors` replaces `isServer`, which today only decides whether the VS Code action is
+offered. Keeping the word `server` for the HTTP API alone avoids a collision between two settings
+that mean opposite things.
 
 Migration behavior:
 
@@ -447,11 +606,21 @@ Migration behavior:
 - Normalize `preferedShell` to `preferredShell` in memory and emit a deprecation warning once.
 - Ignore `wslRepoDirectory` when running inside Linux or WSL, with a migration note explaining that
   the process now runs beside tmux.
-- Replace the ambiguous `isServer` behavior with explicit server settings and profile/action
-  availability.
+- Map `isServer: true` to `actions.guiEditors: false` and warn once. Do not fold it into the
+  `server` block.
 - Reject unknown fields only after the example config and migration tooling are updated; initially
   report them as warnings to avoid silently losing user configuration.
 - Expand `~` and environment variables without evaluating configuration as shell or PowerShell code.
+- Translate the PowerShell `$env:NAME` syntax already present in shipped `customEntries[].paths`
+  into environment lookups. A plain `${VAR}` or `$VAR` expander will not match `$env:LOCALAPPDATA`
+  and would leave the value broken. Accept both spellings, and normalize on write.
+- Preserve `{{path}}` and `{{oproot}}` substitution in `customCommands`, plus the
+  `runInPreferredShell` flag. Define `{{oproot}}` explicitly now that config can live outside the
+  repository: it resolves to the directory containing the loaded config file, not the binary's
+  location. Custom entries continue to carry per-platform `paths`, but only the Linux key is
+  consulted by the Linux/WSL runtime.
+- Add `customCommands` to `config.example.json`, which currently omits a key both implementations
+  read.
 
 ## CLI Shape
 
@@ -470,11 +639,21 @@ op remote ...              call a configured remote server
 op version
 ```
 
-Retain equivalents for `--no-repo-update` and `--no-target` only where they still have clear
-meaning. Drop `--force-native`, `--force-powershell`, and the C build-commit-hash mechanism because
-there will be one implementation.
+Default `op` behavior when run inside tmux: if the current window is tagged `@op-project-id`, or its
+name matches a project, act on that project rather than opening the picker. This preserves the
+window-name targeting feature and improves on it, since tagged windows no longer depend on the name
+surviving a rename. `--no-target` forces the picker.
+
+Retain `--no-repo-update`. Retire `--no-target`'s original justification — it existed because WSL
+could not tell whether it was inside tmux, and the binary now runs beside tmux — but keep the flag
+as an explicit override. Drop `--continuous`, which the dashboard replaces. Drop `--force-native`,
+`--force-powershell`, and the C build-commit-hash mechanism because there will be one
+implementation.
 
 ## Migration Phases
+
+Phases 1 through 4 are the cutover and end with the C and PowerShell code deleted. Phases 5 through
+7 are additive work on a single Go codebase.
 
 ### Phase 1: Go Foundation
 
@@ -501,24 +680,42 @@ PowerShell source execution.
 
 ### Phase 3: gotmux Session and Window Manager
 
+Do this phase early and against real tmux. Three of the five verified gotmux limitations fail
+silently, so a fake-only test suite will report success on operations that never happened.
+
 - Add the gotmux adapter and fake client boundary.
-- Implement main-session reconciliation and dashboard window tagging.
-- Implement idempotent project window creation, splitting, resizing, selection, and rollback.
+- Implement the adapter hardening rules: post-mutation verification, name sanitization, the
+  `recover()` barrier, single-token-only `ShellCommand`, option-value trimming, and direct shell-out
+  where stderr matters.
+- Implement main-session reconciliation and dashboard window tagging, including socket bootstrap
+  when `tmux.socket` is configured.
+- Implement idempotent project window creation, splitting, resizing via `Tmux.Command`, selection,
+  and rollback.
 - Add integration tests using an isolated tmux socket or server name so developer sessions are never
-  touched.
+  touched. Start a server on the socket before constructing the client.
 
-Exit criteria: a fresh isolated session has the dashboard command in its first pane, and project
-windows match the editor-plus-shell layout.
+Exit criteria: a fresh isolated session has the dashboard command running in its first pane
+_verified by re-querying tmux_, project windows match the editor-plus-shell layout, and a project
+directory named with `-:-` produces a typed error instead of a panic.
 
-### Phase 4: Dashboard TUI
+### Phase 4: Dashboard TUI and Cutover
+
+Reduced scope: no statistics panel, no server. This phase ends the migration.
 
 - Build the responsive root model and project filtering section.
 - Add action selection, create/clone forms, progress, errors, and operation completion handling.
 - Add periodic catalog and tmux refreshes.
 - Make the first session pane run `op dashboard` and add dead-pane reconciliation.
+- Implement window-name and `@op-project-id` targeting for `op` run inside tmux.
+- Update `README.md` with install, configuration, tmux, dashboard, and migration instructions.
+- Replace the C make flow with standard Go build and release commands, and add CI for formatting,
+  vetting, tests, and Linux builds.
+- Run the manual acceptance items that do not depend on statistics or the server.
+- Delete `Open-Project.ps1`, `native/`, and `scripts/New-GitWorktree.ps1`.
 
-Exit criteria: external `fzf` is not required; project selection and all core local operations work
-inside the first pane without blocking rendering.
+Exit criteria: external `fzf` is not required, project selection and all core local operations work
+inside the first pane without blocking rendering, and the repository contains one maintained
+implementation with no launch path selecting C or PowerShell code.
 
 ### Phase 5: Statistics
 
@@ -532,27 +729,24 @@ process failures do not terminate the dashboard.
 
 ### Phase 6: Remote Server and Client
 
-- Add authenticated HTTP handlers, middleware, async jobs, idempotency, and filesystem operation
-  locks.
+- Add authenticated HTTP handlers, middleware, async jobs, and per-project single-flight locking.
 - Add the remote CLI client and JSON response models.
 - Add loopback defaults, TLS enforcement, redacted structured logs, and systemd documentation.
+- Document plainly that opening a project executes configured commands on the host.
 - Make dashboard polling surface projects and windows created remotely.
 
 Exit criteria: an authenticated remote client can list projects, queue a clone, monitor it, and open
 the result in a tmux window; unauthorized and unsafe requests are rejected.
 
-### Phase 7: Cutover and Removal
+### Phase 7: Hardening and Release
 
-- Update `README.md` with install, configuration, tmux, dashboard, API, remote client, and migration
-  instructions.
-- Replace the C make flow with standard Go build and release commands.
-- Add CI for formatting, vetting, tests, race tests where practical, and Linux builds.
-- Exercise the acceptance suite against a disposable repository root and tmux socket.
-- Delete `Open-Project.ps1`, `native/`, and `scripts/New-GitWorktree.ps1` only after parity and
-  migration checks pass.
+- Extend CI with race tests and release builds.
+- Exercise the full acceptance suite against a disposable repository root and tmux socket.
+- Extend `README.md` with the API and remote client sections.
+- Revisit whether cross-process filesystem locks and `Idempotency-Key` are warranted now that the
+  dashboard and server both run.
 
-Exit criteria: the repository contains one maintained Go implementation and no launch path selects C
-or PowerShell code.
+Exit criteria: the full acceptance list passes end to end and the release build is reproducible.
 
 ## Verification Strategy
 
@@ -564,7 +758,12 @@ or PowerShell code.
 - Clone name derivation for HTTPS, SSH, SCP-like, trailing-slash, and `.git` URLs.
 - Git clean/dirty decisions and worktree command construction using a fake command runner.
 - App-service idempotency, per-project locking, rollback, and typed errors.
-- Tmux reconciliation and project-window state machines using a fake gotmux-facing client.
+- Tmux reconciliation and project-window state machines using a fake gotmux-facing client. Fakes
+  must be able to model gotmux's silent-success behavior, or the tests will not catch the failures
+  that actually occur.
+- Name sanitization: `-:-`, newlines, `:`, `.`, spaces, and quotes in project and session names.
+- Config migration of `$env:NAME` paths, `{{path}}` and `{{oproot}}` substitution,
+  `runInPreferredShell`, and `isServer` to `actions.guiEditors`.
 - Stats deltas and process-tree aggregation using fake snapshots.
 - Bubble Tea model updates for focus, filtering, resize, success, failure, and stale refresh
   messages.
@@ -573,9 +772,14 @@ or PowerShell code.
 
 ### Integration Tests
 
-- Use a unique disposable tmux socket/server and temporary repository directory.
+- Use a unique disposable tmux socket/server and temporary repository directory. Start the tmux
+  server on that socket before constructing the gotmux client.
 - Verify session creation, first dashboard window placement, user-option tags, window reuse, pane
   split direction, start directories, pane sizing, and cleanup.
+- Assert that the dashboard pane is actually alive after `EnsureMainSession`, not merely that the
+  call returned without error. This is the regression test for the silent `ShellCommand` failure.
+- Open a project whose directory name contains `-:-` and assert a typed error rather than a process
+  panic.
 - Clone a local bare repository fixture to avoid network dependence.
 - Create a real worktree and verify branch/destination behavior.
 - Run the API against the real app service with isolated git and tmux dependencies.
@@ -604,16 +808,19 @@ or PowerShell code.
 
 ## Risks and Mitigations
 
-| Risk                                                     | Mitigation                                                                                                                                                                   |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| gotmux v0.x API gaps or behavior changes                 | Pin the version, isolate it in one adapter, cover required operations with isolated tmux integration tests, and use `Tmux.Command` only inside that adapter.                 |
-| gotmux command quoting around pane shell commands        | Prefer structured start-directory options, restrict configured profile commands, test paths with spaces and quotes, and keep compatibility workarounds local to the adapter. |
-| Dashboard process exits and removes the only pane/window | Tag and reconcile the dashboard, detect dead/missing panes, support respawn, and never couple dashboard lifetime to project-window lifetime.                                 |
-| Concurrent TUI and API operations create duplicates      | Use filesystem locks, project user-option tags, idempotency keys, and post-create reconciliation.                                                                            |
-| Clone credentials leak in logs or job output             | Redact URL user info and authorization headers; expose bounded sanitized progress instead of raw command lines.                                                              |
-| Process collection is expensive or racy                  | Scope to tmux pane process trees, sample asynchronously at a bounded interval, cache the last snapshot, and tolerate vanished processes.                                     |
-| Existing Windows-host workflow loses features            | State Linux/WSL runtime support clearly, preserve desktop launchers only when present in that environment, and verify required workflows before deleting PowerShell.         |
-| Config migration breaks a persisted local setup          | Parse current keys, warn on deprecated fields, ship an updated example, and test realistic migration fixtures before cutover.                                                |
+| Risk                                                                                       | Mitigation                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| gotmux v0.x API gaps or behavior changes                                                   | Pin the version, isolate it in one adapter, cover required operations with isolated tmux integration tests, and use `Tmux.Command` only inside that adapter.                                                |
+| gotmux `ShellCommand` silently discards multi-word commands and returns success (verified) | Never pass a multi-word `ShellCommand`; send literal text plus Enter instead, and verify by re-querying tmux after every mutation. Covered by an integration test.                                          |
+| gotmux panics the process on `-:-` or newlines in format values (verified)                 | Sanitize all names reaching tmux and wrap every gotmux call in a `recover()` barrier that returns a typed error.                                                                                            |
+| gotmux errors carry no stderr, so failures are undiagnosable (verified)                    | Shell out directly from the adapter where error detail matters; do not build typed errors on gotmux error values.                                                                                           |
+| Adapter workarounds outgrow their value                                                    | Keep them in `internal/tmux` only; if the boundary keeps growing, vendor or fork gotmux as a local decision that does not touch callers.                                                                    |
+| Dashboard process exits and removes the only pane/window                                   | Tag and reconcile the dashboard, detect dead/missing panes, support respawn, and never couple dashboard lifetime to project-window lifetime.                                                                |
+| Concurrent TUI and API operations create duplicates                                        | Use project user-option tags and post-create reconciliation, with a per-project single-flight lock. Escalate to filesystem locks and idempotency keys only if the dashboard and server both become writers. |
+| Clone credentials leak in logs or job output                                               | Redact URL user info and authorization headers; expose bounded sanitized progress instead of raw command lines.                                                                                             |
+| Process collection is expensive or racy                                                    | Scope to tmux pane process trees, sample asynchronously at a bounded interval, cache the last snapshot, and tolerate vanished processes.                                                                    |
+| Existing Windows-host workflow loses features                                              | State Linux/WSL runtime support clearly, preserve desktop launchers only when present in that environment, and verify required workflows before deleting PowerShell.                                        |
+| Config migration breaks a persisted local setup                                            | Parse current keys, warn on deprecated fields, ship an updated example, and test realistic migration fixtures before cutover.                                                                               |
 
 ## Implementation Questions to Confirm
 
@@ -627,17 +834,30 @@ These do not block the foundation, but should be confirmed before finalizing pha
 4. Default project profile: preserve `nvim` plus a 20-row preferred-shell pane.
 5. Platform scope: run the full application in Linux/WSL beside tmux rather than controlling WSL
    tmux from a native Windows process.
+6. gotmux disposition: start with the pinned upstream release plus the adapter hardening above.
+   Revisit vendoring or forking if the workarounds keep growing, since several of the limitations
+   are library bugs rather than missing features.
+7. Windows-side actions: `vs` and the `nvim-win*` variants have no home in a Linux/WSL runtime.
+   Confirm they are genuinely unused before Phase 4 deletes them along with the PowerShell script.
 
 ## Definition of Done
 
-- One Go binary implements dashboard, CLI, repository operations, gotmux orchestration, process
-  statistics, server, and remote client.
-- A new main session always starts with the dashboard in its first pane.
+### Cutover (end of Phase 4)
+
+- One Go binary implements the dashboard, CLI, repository operations, and gotmux orchestration.
+- A new main session always starts with the dashboard running in its first pane, verified by
+  re-querying tmux rather than by a `nil` error.
 - Embedded fuzzy project selection works without `fzf`.
+- Window-name and tag-based project targeting work when `op` is run inside tmux.
+- Current configuration has a documented migration path, including `$env:` paths, command
+  placeholders, and `isServer`.
+- Hostile project names produce typed errors, not panics.
+- Automated tests cover service logic, TUI updates, git integration, and isolated tmux behavior.
+- `Open-Project.ps1`, `native/`, and `scripts/New-GitWorktree.ps1` are deleted.
+
+### Complete (end of Phase 7)
+
 - Dashboard metrics update safely and remain responsive.
-- Remote clone and project-window operations are authenticated, validated, idempotent, and
-  observable as jobs.
-- Current configuration has a documented migration path.
-- Automated tests cover service logic, TUI updates, HTTP security, git integration, and isolated
-  tmux behavior.
-- C and PowerShell implementation files are removed only after acceptance criteria pass.
+- Remote clone and project-window operations are authenticated, validated, and observable as jobs,
+  with the host-execution consequence documented.
+- Automated tests additionally cover HTTP security and concurrency under `-race`.
