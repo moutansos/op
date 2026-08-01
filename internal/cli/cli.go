@@ -204,9 +204,17 @@ func (r *runner) getService(ctx context.Context, dependencies ...string) (Servic
 	if err != nil {
 		return nil, domain.NewError(domain.ErrorCodeDependency, "cli.executable", "normalize current executable", err)
 	}
+	dashboardArgs := []string{shellWord(executable)}
+	if r.config.SourcePath != "" {
+		dashboardArgs = append(dashboardArgs, "--config", shellWord(r.config.SourcePath))
+	}
+	if r.globals.noRepoUpdate {
+		dashboardArgs = append(dashboardArgs, "--no-repo-update")
+	}
+	dashboardArgs = append(dashboardArgs, "dashboard")
 	service, err := r.options.NewService(ctx, r.config, app.Options{
 		EnableRepositoryUpdates: !r.globals.noRepoUpdate,
-		DashboardCommand:        shellWord(executable) + " dashboard",
+		DashboardCommand:        strings.Join(dashboardArgs, " "),
 		Output:                  r.options.Stdout,
 		Error:                   r.options.Stderr,
 	})

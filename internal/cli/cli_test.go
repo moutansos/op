@@ -203,7 +203,7 @@ func TestDefaultDispatchEnsuresAndAttachesWithAbsoluteDashboardCommand(t *testin
 	if runtime.service.ensureCalls != 1 || runtime.service.attachCalls != 1 {
 		t.Fatalf("ensure=%d attach=%d", runtime.service.ensureCalls, runtime.service.attachCalls)
 	}
-	if runtime.appOptions.EnableRepositoryUpdates || runtime.appOptions.DashboardCommand != "/opt/op dashboard" {
+	if runtime.appOptions.EnableRepositoryUpdates || runtime.appOptions.DashboardCommand != "/opt/op --config /config/config.json --no-repo-update dashboard" {
 		t.Fatalf("app options = %+v", runtime.appOptions)
 	}
 }

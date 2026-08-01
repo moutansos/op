@@ -544,6 +544,44 @@ func TestEnsureMainSessionRejectsSilentRespawn(t *testing.T) {
 	assertCode(t, err, domain.ErrorCodeDependency)
 }
 
+func TestEnsureMainSessionRestartsDashboardInIdleManagedShell(t *testing.T) {
+	fake := managedFake()
+	dashboard := fake.windowNamed("op")
+	pane := fake.panes[dashboard.ID][0]
+	originalPID := pane.PID
+	pane.CurrentCommand = "zsh"
+	manager := testManager(fake)
+	manager.dashboardProcessAlive = func(context.Context, int, string) (bool, error) { return false, nil }
+
+	result, err := manager.EnsureMainSession(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureMainSession() error = %v", err)
+	}
+	if !result.Repaired || pane.PID == originalPID || pane.CurrentCommand != "op" {
+		t.Fatalf("idle dashboard repair = %+v; pane = %+v", result, pane)
+	}
+	if got := fake.options[dashboard.ID][optionDashboardPID]; got != strconv.FormatInt(int64(pane.PID), 10) {
+		t.Fatalf("managed dashboard pid = %q, want %d", got, pane.PID)
+	}
+}
+
+func TestEnsureMainSessionDoesNotReplacePaneWhenProcessInspectionFails(t *testing.T) {
+	fake := managedFake()
+	dashboard := fake.windowNamed("op")
+	pane := fake.panes[dashboard.ID][0]
+	originalPID := pane.PID
+	manager := testManager(fake)
+	manager.dashboardProcessAlive = func(context.Context, int, string) (bool, error) {
+		return false, errors.New("process inspection unavailable")
+	}
+
+	_, err := manager.EnsureMainSession(context.Background())
+	assertCode(t, err, domain.ErrorCodeDependency)
+	if pane.PID != originalPID {
+		t.Fatalf("dashboard pane was replaced after uncertain inspection: %+v", pane)
+	}
+}
+
 func TestOpenProjectWindowBuildsLayoutReusesAndCreatesInstances(t *testing.T) {
 	fake := managedFake()
 	manager := testManager(fake)
@@ -1196,6 +1234,21 @@ func TestBuildEditorPaneCommandRejectsMalformedPreferredShell(t *testing.T) {
 	}
 }
 
+func TestBuildPersistentDashboardShellCommandLeavesShellAfterExit(t *testing.T) {
+	command, err := buildPersistentShellCommand(`'/opt/shell dir/zsh' -l`, `'/opt/op dir/op' --config '/config dir/config.json' dashboard`)
+	if err != nil {
+		t.Fatalf("buildPersistentShellCommand() error = %v", err)
+	}
+	words := shellWords(command)
+	want := []string{
+		"exec", "/opt/shell dir/zsh", "-l", "-ic",
+		`'/opt/op dir/op' --config '/config dir/config.json' dashboard; exec '/opt/shell dir/zsh' '-l'`,
+	}
+	if !slices.Equal(words, want) {
+		t.Fatalf("wrapper words = %#v, want %#v; command = %q", words, want, command)
+	}
+}
+
 func assertCode(t *testing.T, err error, code domain.ErrorCode) {
 	t.Helper()
 	if err == nil || !domain.IsCode(err, code) {
@@ -1213,6 +1266,7 @@ func testConfig() ManagerConfig {
 
 func testManager(fake *fakeClient) *Manager {
 	manager := newManager(testConfig(), fake, false)
+	manager.dashboardProcessAlive = func(context.Context, int, string) (bool, error) { return true, nil }
 	manager.startupWait = 15 * time.Millisecond
 	manager.startupPoll = time.Millisecond
 	manager.startupStable = 0
@@ -1524,10 +1578,20 @@ func (f *fakeClient) startCommand(pane *paneState, command string) {
 	if command == "" || f.silent["start-command"] {
 		return
 	}
-	pane.CurrentCommand = commandExecutable(command)
+	pane.CurrentCommand = foregroundExecutable(command)
 	if f.startupCommandOverride != "" {
 		pane.CurrentCommand = f.startupCommandOverride
 	}
+}
+
+func foregroundExecutable(command string) string {
+	words := shellWords(command)
+	for index, word := range words {
+		if (word == "-ic" || word == "-Command") && index+1 < len(words) {
+			return commandExecutable(words[index+1])
+		}
+	}
+	return commandExecutable(command)
 }
 
 func (f *fakeClient) KillPane(_ context.Context, paneID string) error {
