@@ -24,15 +24,12 @@ import (
 
 const defaultRemoteTimeout = 30 * time.Second
 
-// Version contains build metadata intended to be populated with -ldflags.
 type Version struct {
 	Version string `json:"version"`
 	Commit  string `json:"commit"`
 	Date    string `json:"date"`
 }
 
-// Service extends the shared domain API only with local tmux entry-point
-// operations. Remote and dashboard transports continue to use domain.Service.
 type Service interface {
 	domain.Service
 	ResolveCurrentProject(context.Context) (domain.Project, bool, error)
@@ -43,8 +40,6 @@ type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
-// Options supplies process boundaries so parsing and dispatch can be tested
-// without touching the user's git repositories, tmux server, or network.
 type Options struct {
 	Stdin        io.Reader
 	Stdout       io.Writer
