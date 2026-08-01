@@ -1,15 +1,41 @@
 {
-    "repoDirectory": "~/source/repos",
-    "wslRepoDirectory": "/mnt/c/Users/bbrougher/source/repos",
-    "isServer": false,
-    "preferedShell": "zsh",
-    "customEntries": [
-        {
-            "name": "<< nvim-config >>",
-            "paths": {
-                "win": "$env:LOCALAPPDATA/nvim",
-                "linux": "~/.config/nvim"
-            }
-        }
-    ]
+  "repoDirectory": "~/source/repos",
+  "preferredShell": "zsh",
+  "tmux": {
+    "session": "code",
+    "dashboardWindow": "op",
+    "socket": "",
+    "shellPaneRows": 20,
+    "defaultProfile": "nvim"
+  },
+  "stats": {
+    "refreshInterval": "2s",
+    "tmuxRefreshInterval": "5s"
+  },
+  "server": {
+    "enabled": false,
+    "listen": "127.0.0.1:8787",
+    "tokenFile": "~/.config/op/server-token",
+    "tlsCertFile": "",
+    "tlsKeyFile": ""
+  },
+  "actions": {
+    "guiEditors": false
+  },
+  "customEntries": [
+    {
+      "name": "nvim-config",
+      "paths": {
+        "win": "$env:LOCALAPPDATA/nvim",
+        "linux": "~/.config/nvim"
+      }
+    }
+  ],
+  "customCommands": [
+    {
+      "name": "Open opencode",
+      "command": "cd {{oproot}} && opencode {{path}}",
+      "runInPreferredShell": true
+    }
+  ]
 }

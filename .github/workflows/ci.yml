@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Format, vet, and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            printf 'Files require gofmt:\n%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests
+        run: go test ./...
+
+  race:
+    name: Race tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -race ./...
+
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            goos: linux
+            goarch: amd64
+            output: op-linux-amd64
+          - name: windows-amd64
+            goos: windows
+            goarch: amd64
+            output: op-windows-amd64.exe
+          - name: windows-arm64
+            goos: windows
+            goarch: arm64
+            output: op-windows-arm64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Cross-build
+        env:
+          CGO_ENABLED: "0"
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: ${{ matrix.goos }}
+          OUTPUT: ${{ matrix.output }}
+        run: go build -trimpath -o "$RUNNER_TEMP/$OUTPUT" ./cmd/op
+      - name: Compile every package for Windows
+        if: matrix.goos == 'windows'
+        env:
+          CGO_ENABLED: "0"
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: windows
+        run: go build ./...
+      - name: Compile Windows test packages
+        if: matrix.goos == 'windows'
+        env:
+          CGO_ENABLED: "0"
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: windows
+        run: go test -run '^$' -exec=/bin/true ./...
+
+  tmux-integration:
+    name: Isolated tmux integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes tmux
+      - name: Run integration tests on disposable sockets
+        env:
+          OP_TMUX_INTEGRATION: "1"
+          TMUX: ""
+          TMUX_PANE: ""
+        run: go test ./internal/tmux -run '^TestIntegration' -count=1 -v

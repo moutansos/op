@@ -1,0 +1,16 @@
+[Unit]
+Description=op remote-control API
+Documentation=https://github.com/moutansos/op#server-and-remote-client
+
+[Service]
+Type=simple
+# Adjust PATH when git, tmux, the preferred shell, or configured actions live elsewhere.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/op --config %h/.config/op/config.json serve
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
