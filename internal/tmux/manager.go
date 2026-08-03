@@ -53,15 +53,17 @@ type OpenProjectWindowRequest struct {
 }
 
 type Manager struct {
-	config         ManagerConfig
-	client         tmuxClient
-	bootstrapped   bool
-	lookupEnv      func(string) string
-	now            func() time.Time
-	startupWait    time.Duration
-	startupPoll    time.Duration
-	startupStable  time.Duration
-	cleanupTimeout time.Duration
+	config                ManagerConfig
+	client                tmuxClient
+	bootstrapped          bool
+	dashboardPaneCommand  string
+	dashboardProcessAlive func(context.Context, int, string) (bool, error)
+	lookupEnv             func(string) string
+	now                   func() time.Time
+	startupWait           time.Duration
+	startupPoll           time.Duration
+	startupStable         time.Duration
+	cleanupTimeout        time.Duration
 }
 
 // New initializes the tmux adapter. A configured socket is bootstrapped before
@@ -100,16 +102,19 @@ func newManager(config ManagerConfig, client tmuxClient, bootstrapped bool) *Man
 	if config.Error == nil {
 		config.Error = os.Stderr
 	}
+	dashboardPaneCommand, _ := buildPersistentShellCommand(config.PreferredShell, config.DashboardCommand)
 	return &Manager{
-		config:         config,
-		client:         client,
-		bootstrapped:   bootstrapped,
-		lookupEnv:      os.Getenv,
-		now:            time.Now,
-		startupWait:    2 * time.Second,
-		startupPoll:    20 * time.Millisecond,
-		startupStable:  75 * time.Millisecond,
-		cleanupTimeout: defaultCleanupTimeout,
+		config:                config,
+		client:                client,
+		bootstrapped:          bootstrapped,
+		dashboardPaneCommand:  dashboardPaneCommand,
+		dashboardProcessAlive: processTreeContainsCommand,
+		lookupEnv:             os.Getenv,
+		now:                   time.Now,
+		startupWait:           2 * time.Second,
+		startupPoll:           20 * time.Millisecond,
+		startupStable:         75 * time.Millisecond,
+		cleanupTimeout:        defaultCleanupTimeout,
 	}
 }
 
@@ -148,6 +153,9 @@ func validateConfig(config ManagerConfig) error {
 	if config.ShellPaneRows <= 0 {
 		return domain.FieldError(domain.ErrorCodeInvalidArgument, op, "shellPaneRows", "must be greater than zero")
 	}
+	if _, err := buildPersistentShellCommand(config.PreferredShell, config.DashboardCommand); err != nil {
+		return domain.FieldError(domain.ErrorCodeInvalidArgument, op, "preferredShell", err.Error())
+	}
 	return nil
 }
 
@@ -166,7 +174,7 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 	created := m.bootstrapped
 	m.bootstrapped = false
 	if session == nil {
-		if err := m.client.CreateSession(ctx, m.config.Session, m.config.StartDirectory, dashboardExecCommand(m.config.DashboardCommand)); err != nil {
+		if err := m.client.CreateSession(ctx, m.config.Session, m.config.StartDirectory, m.dashboardPaneCommand); err != nil {
 			return result, m.failure("tmux.ensure_main_session", "create session", err)
 		}
 		created = true
@@ -249,6 +257,7 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 	var dashboardPane *paneState
 	startDashboard := dashboardCreated
 	if trackingComplete {
+		needsRespawn := false
 		for i := range panes {
 			if panes[i].ID == managedPaneID {
 				dashboardPane = &panes[i]
@@ -256,12 +265,18 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 			}
 		}
 		if dashboardPane != nil && !dashboardPane.Dead && int64(dashboardPane.PID) == managedPID {
-			// A tea.Exec child can change pane_current_command, but not the pane
-			// root process established by exec.
+			running, processErr := m.dashboardProcessAlive(ctx, int(dashboardPane.PID), m.config.DashboardCommand)
+			if processErr != nil {
+				return result, m.failure("tmux.ensure_main_session", "inspect dashboard process", processErr)
+			}
+			needsRespawn = !running
 		} else if dashboardPane != nil {
+			needsRespawn = true
+		}
+		if dashboardPane != nil && needsRespawn {
 			wasLive := !dashboardPane.Dead
 			preRespawnPID := dashboardPane.PID
-			if err := m.client.RespawnPane(ctx, dashboardPane.ID, dashboardExecCommand(m.config.DashboardCommand)); err != nil {
+			if err := m.client.RespawnPane(ctx, dashboardPane.ID, m.dashboardPaneCommand); err != nil {
 				return result, m.failure("tmux.ensure_main_session", "respawn dashboard pane", err)
 			}
 			verified, err := m.paneByID(ctx, dashboard.ID, dashboardPane.ID)
@@ -298,7 +313,7 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 		if len(panes) == 0 {
 			return result, m.verification("tmux.ensure_main_session", "dashboard window has no pane available for repair", nil)
 		}
-		if err := m.client.SplitPane(ctx, panes[0].ID, m.config.StartDirectory, dashboardExecCommand(m.config.DashboardCommand)); err != nil {
+		if err := m.client.SplitPane(ctx, panes[0].ID, m.config.StartDirectory, m.dashboardPaneCommand); err != nil {
 			return result, m.failure("tmux.ensure_main_session", "recreate managed dashboard pane", err)
 		}
 		panes, err = m.client.ListPanes(ctx, dashboard.ID)
@@ -815,7 +830,7 @@ func (m *Manager) findDashboard(_ context.Context, windows []taggedWindow) (*tag
 
 func (m *Manager) createDashboardWindow(ctx context.Context) (dashboard *taggedWindow, err error) {
 	const op = "tmux.ensure_main_session"
-	createdID, err := m.createWindow(ctx, op, "create dashboard window", m.config.DashboardWindow, m.config.StartDirectory, dashboardExecCommand(m.config.DashboardCommand))
+	createdID, err := m.createWindow(ctx, op, "create dashboard window", m.config.DashboardWindow, m.config.StartDirectory, m.dashboardPaneCommand)
 	if err != nil {
 		return nil, err
 	}
@@ -1256,16 +1271,20 @@ func commandExecutable(command string) string {
 }
 
 func buildEditorPaneCommand(preferredShell, editorCommand string) (string, error) {
+	return buildPersistentShellCommand(preferredShell, editorCommand)
+}
+
+func buildPersistentShellCommand(preferredShell, foregroundCommand string) (string, error) {
 	shell, err := parseDirectCommand(preferredShell)
 	if err != nil {
 		return "", fmt.Errorf("invalid preferred shell command: %w", err)
 	}
 	command := append([]string{"exec"}, shell...)
 	if isPowerShell(shell[0]) {
-		command = append(command, "-NoExit", "-Command", editorCommand)
+		command = append(command, "-NoExit", "-Command", foregroundCommand)
 	} else {
 		restart := quoteShellWords(shell)
-		command = append(command, "-ic", editorCommand+"; exec "+restart)
+		command = append(command, "-ic", foregroundCommand+"; exec "+restart)
 	}
 	return command[0] + " " + quoteShellWords(command[1:]), nil
 }
@@ -1418,13 +1437,6 @@ func shellWords(command string) []string {
 
 func doubleQuoteEscapes(character byte) bool {
 	return character == '$' || character == '`' || character == '"' || character == '\\' || character == '\n'
-}
-
-func dashboardExecCommand(command string) string {
-	if fields := strings.Fields(command); len(fields) > 0 && fields[0] == "exec" {
-		return command
-	}
-	return "exec " + command
 }
 
 func trimLineEndings(value string) string {

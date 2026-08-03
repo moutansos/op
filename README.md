@@ -167,7 +167,7 @@ Keys:
 | `1`, `2`, `3`        | Focus Projects, System, or Tmux.                                                         |
 | `r`                  | Refresh all snapshots immediately.                                                       |
 | `esc`                | Cancel an action chooser or form.                                                        |
-| `q`, `ctrl+c`        | Exit the dashboard process. Plain `op` will reconcile/restart it on the next invocation. |
+| `q`, `ctrl+c`        | Exit the dashboard to its tmux pane's shell. Plain `op` restarts it on the next invocation. |
 
 Filtering uses project names, path names, full paths, and tags. It is fzf-style matching implemented
 with Bubble Tea/Bubbles and does not invoke `fzf`.
@@ -312,7 +312,9 @@ After migration, rename old fields to the canonical spellings and remove ignored
 - An existing pre-migration session gains a dashboard without unrelated windows being deleted. If
   the base index is occupied, the windows are swapped.
 - A missing, dead, or PID-replaced managed dashboard pane is recreated or respawned; foreground
-  editor, shell, and custom-action processes sharing the verified pane root PID are left running.
+  editor, shell, and custom-action processes descended from the verified pane shell are left running.
+  The dashboard runs as a child of that shell, so exiting it preserves the window and plain `op`
+  restarts it in the same managed pane.
 - Each project window is tagged with project ID, path, profile, and ownership options.
 - The default project layout starts `nvim .` inside the configured preferred shell in the top/main
   pane and starts the preferred shell in a bottom pane resized to `tmux.shellPaneRows` (20 by

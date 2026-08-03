@@ -39,7 +39,11 @@ func newCommandClient(ctx context.Context, config ManagerConfig) (tmuxClient, bo
 			if config.StartDirectory != "" {
 				args = append(args, "-c", config.StartDirectory)
 			}
-			args = append(args, dashboardExecCommand(config.DashboardCommand))
+			dashboardPaneCommand, commandErr := buildPersistentShellCommand(config.PreferredShell, config.DashboardCommand)
+			if commandErr != nil {
+				return nil, false, domain.NewError(domain.ErrorCodeInvalidArgument, "tmux.new", "build dashboard shell command", commandErr)
+			}
+			args = append(args, dashboardPaneCommand)
 			if _, createErr := raw.runSessionCreation(ctx, args...); createErr != nil {
 				if contextErr := ctx.Err(); contextErr != nil {
 					return nil, false, domain.NewError(domain.CodeOf(contextErr), "tmux.new", "bootstrap configured socket", contextErr)

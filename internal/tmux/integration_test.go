@@ -513,6 +513,35 @@ func TestIntegrationDashboardRecoversAfterSolePaneExits(t *testing.T) {
 	waitForPaneCommand(t, manager, window.ID, "sleep")
 }
 
+func TestIntegrationDashboardExitLeavesShellAndRestartsInSamePane(t *testing.T) {
+	manager, raw, dashboard := newDashboardIntegration(t)
+	paneID := dashboard.Panes[0].ID
+	windowID := dashboard.ID
+	originalPID := dashboard.Panes[0].PID
+
+	if _, err := raw.run(context.Background(), "send-keys", "-t", paneID, "C-c"); err != nil {
+		t.Fatalf("stop dashboard child: %v", err)
+	}
+	waitForPaneCommand(t, manager, windowID, "sh")
+	pane, err := manager.paneByID(context.Background(), windowID, paneID)
+	if err != nil || pane == nil || pane.Dead || pane.PID != originalPID {
+		t.Fatalf("surviving dashboard shell = %+v, %v; original PID = %d", pane, err, originalPID)
+	}
+
+	repaired, err := manager.EnsureMainSession(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureMainSession() error = %v", err)
+	}
+	if !repaired.Repaired || findSnapshotPane(repaired, windowID, paneID) == nil {
+		t.Fatalf("dashboard restart did not preserve window and pane: %+v", repaired)
+	}
+	waitForPaneCommand(t, manager, windowID, "sleep")
+	restarted, err := manager.paneByID(context.Background(), windowID, paneID)
+	if err != nil || restarted == nil || restarted.PID == originalPID {
+		t.Fatalf("restarted dashboard pane = %+v, %v; original PID = %d", restarted, err, originalPID)
+	}
+}
+
 func TestIntegrationReadSnapshotDoesNotBootstrapConfiguredSocket(t *testing.T) {
 	requireTmuxIntegration(t)
 	executable, err := exec.LookPath("tmux")
