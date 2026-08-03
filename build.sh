@@ -16,6 +16,7 @@ integration_flag="false"
 run_flag="false"
 all_flag="false"
 clean_flag="false"
+quiet_flag="false"
 linux_binary_ready="false"
 run_args=()
 
@@ -32,15 +33,19 @@ Options:
   --run                  Build and run the Linux/WSL op binary
   --all                  Run build, test, and run
   --clean                Remove .build_output
+  -q, --quiet            Suppress stage banners (useful for wrapper scripts)
   --                     Pass remaining arguments to op (requires --run or --all)
   -h, --help             Show this help message
+
+Stage banners and build notices are written to stderr; only op's own output
+goes to stdout, so piping machine-readable output is safe.
 
 Examples:
   $0 --build --test
   $0 --build-windows
   $0 --integration
   $0 --run -- projects --json
-  $0 --run -- --config ./config.json open my-project
+  $0 --quiet --run -- --config ./config.json open my-project
 
 Build metadata can be overridden with VERSION, COMMIT, and BUILD_DATE.
 EOF
@@ -48,9 +53,14 @@ EOF
 
 function print_stage {
   local stage_name="$1"
-  printf '\n==========================================\n'
-  printf 'Starting stage: %s\n' "$stage_name"
-  printf '==========================================\n\n'
+  if [[ "$quiet_flag" == "true" ]]; then
+    return 0
+  fi
+  # Banners are diagnostics: keep stdout clean so `--run -- projects --json`
+  # and other machine-readable output can be piped safely.
+  printf '\n==========================================\n' >&2
+  printf 'Starting stage: %s\n' "$stage_name" >&2
+  printf '==========================================\n\n' >&2
 }
 
 function init_output_dir {
@@ -107,6 +117,7 @@ while [[ "$#" -gt 0 ]]; do
     --run) run_flag="true" ;;
     --all) all_flag="true" ;;
     --clean) clean_flag="true" ;;
+    -q|--quiet) quiet_flag="true" ;;
     --)
       shift
       run_args=("$@")
@@ -152,14 +163,14 @@ fi
 if [[ "$build_flag" == "true" ]]; then
   print_stage "Building Linux/WSL Application"
   build_linux || exit $?
-  printf 'Built %s\n' "$LINUX_BINARY"
+  printf 'Built %s\n' "$LINUX_BINARY" >&2
 fi
 
 if [[ "$windows_flag" == "true" ]]; then
   print_stage "Building Windows WSL Proxies"
   build_windows || exit $?
-  printf 'Built %s\n' "$WINDOWS_AMD64_BINARY"
-  printf 'Built %s\n' "$WINDOWS_ARM64_BINARY"
+  printf 'Built %s\n' "$WINDOWS_AMD64_BINARY" >&2
+  printf 'Built %s\n' "$WINDOWS_ARM64_BINARY" >&2
 fi
 
 if [[ "$test_flag" == "true" ]]; then
