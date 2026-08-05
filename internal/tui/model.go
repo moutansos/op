@@ -114,9 +114,10 @@ func NewModel(ctx context.Context, service domain.Service, options Options) Mode
 	}
 }
 
-// Init starts independent project, tmux, and statistics refresh loops.
+// Init focuses project filtering and starts the independent refresh loops.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
+		func() tea.Msg { return tea.FocusMsg{} },
 		m.loadProjectsCmd(), m.loadTmuxCmd(), m.loadStatsCmd(),
 		m.projectTickCmd(), m.tmuxTickCmd(), m.statsTickCmd(),
 	)
@@ -129,6 +130,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.resizeChildren()
 		return m, nil
+
+	case tea.FocusMsg:
+		if m.overlay != noOverlay {
+			return m, nil
+		}
+		if m.projects.FilterState() == list.Unfiltered {
+			m.projects.SetFilterText("")
+		}
+		m.projects.SetFilterState(list.Filtering)
+		return m, textinput.Blink
 
 	case projectsLoadedMsg:
 		m.projectsRefreshing = false

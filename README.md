@@ -157,7 +157,7 @@ Keys:
 
 | Key                  | Action                                                                                   |
 | -------------------- | ---------------------------------------------------------------------------------------- |
-| `/`                  | Start fuzzy filtering in the project list.                                               |
+| `/`                  | Start fuzzy filtering in the project list. Window focus also re-enters filter mode.      |
 | `up`/`down`, `j`/`k` | Navigate the focused list or action chooser.                                             |
 | `enter`              | Open the selected project, run the selected action, or submit a form.                    |
 | `a`                  | Choose Neovim, shell, worktree, optional VS Code, or a configured custom command.        |
@@ -170,7 +170,9 @@ Keys:
 | `q`, `ctrl+c`        | Exit the dashboard to its tmux pane's shell. Plain `op` restarts it on the next invocation. |
 
 Filtering uses project names, path names, full paths, and tags. It is fzf-style matching implemented
-with Bubble Tea/Bubbles and does not invoke `fzf`.
+with Bubble Tea/Bubbles and does not invoke `fzf`. The dashboard requests terminal focus reporting so
+returning to its window restores filter mode while preserving the current query. Under tmux, this
+requires `set -g focus-events on` in the tmux configuration.
 
 Neovim, shell, and configured custom actions temporarily release the alternate screen while they own
 the terminal, then restore the dashboard when they exit. These terminal actions are not bounded by

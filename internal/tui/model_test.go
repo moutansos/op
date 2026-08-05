@@ -172,10 +172,13 @@ func TestFilteringFocusAndResize(t *testing.T) {
 		domain.Project{ID: "two", Name: "dotfiles", Path: "/home/me/.config/nvim", Tags: []string{"cfg"}},
 	)
 
-	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	updated, _ := model.Update(tea.FocusMsg{})
 	model = updated.(Model)
 	if !model.projects.SettingFilter() {
-		t.Fatal("slash did not focus the embedded project filter")
+		t.Fatal("window focus did not focus the embedded project filter")
+	}
+	if got := len(model.projects.VisibleItems()); got != 2 {
+		t.Fatalf("visible projects after focus = %d, want 2", got)
 	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("cfg")})
 	model = updated.(Model)
@@ -203,6 +206,25 @@ func TestFilteringFocusAndResize(t *testing.T) {
 	}
 	if view := model.View(); !strings.Contains(view, "1 Projects") || !strings.Contains(view, "System + Processes") {
 		t.Fatalf("narrow view did not render tabs and focused system panel:\n%s", view)
+	}
+}
+
+func TestWindowFocusPreservesAppliedProjectFilter(t *testing.T) {
+	model := loadProjectsForTest(testModel(&fakeService{}),
+		domain.Project{ID: "one", Name: "api-server", Path: "/repos/api-server"},
+		domain.Project{ID: "two", Name: "dotfiles", Path: "/home/me/.config/nvim"},
+	)
+	model.projects.SetFilterText("api")
+
+	model = updateTestModel(model, tea.FocusMsg{})
+	if !model.projects.SettingFilter() {
+		t.Fatal("window focus did not re-enter filter mode")
+	}
+	if got := model.projects.FilterValue(); got != "api" {
+		t.Fatalf("filter value after focus = %q, want api", got)
+	}
+	if got := visibleProjectIDs(model); !slices.Equal(got, []string{"one"}) {
+		t.Fatalf("visible project IDs after focus = %v, want [one]", got)
 	}
 }
 

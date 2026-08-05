@@ -446,7 +446,7 @@ func TestRunCancelsPendingCommandsOnNormalQuit(t *testing.T) {
 	operation := newBlockingOperation()
 	service := &blockingService{list: operation}
 	parent := context.Background()
-	err := runForTest(parent, service, &gatedReader{gate: operation.started, data: []byte("q")})
+	err := runForTest(parent, service, &gatedReader{gate: operation.started, data: []byte{byte(tea.KeyCtrlC)}})
 	if err != nil {
 		t.Fatalf("run error = %v", err)
 	}

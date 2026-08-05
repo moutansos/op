@@ -22,7 +22,7 @@ func run(ctx context.Context, service domain.Service, options Options, programOp
 	}
 	model := NewModel(ctx, service, options)
 	defer model.cancel()
-	programOptions = append([]tea.ProgramOption{tea.WithContext(ctx)}, programOptions...)
+	programOptions = append([]tea.ProgramOption{tea.WithContext(ctx), tea.WithReportFocus()}, programOptions...)
 	_, err := tea.NewProgram(model, programOptions...).Run()
 	return err
 }
