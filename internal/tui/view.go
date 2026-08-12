@@ -43,7 +43,18 @@ func (m Model) View() string {
 	if m.overlay != noOverlay {
 		return m.overlayView(dashboard)
 	}
+	if m.operation == "open" {
+		return m.openingView()
+	}
 	return dashboard
+}
+
+func (m Model) openingView() string {
+	box := renderPanel("Opening Project", m.status, min(44, m.width-6), 0, true, nil)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box,
+		lipgloss.WithWhitespaceChars("·"),
+		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#D8D4E3", Dark: "#34303E"}),
+	)
 }
 
 func (m Model) wideView() string {

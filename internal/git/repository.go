@@ -166,6 +166,13 @@ func (r *Repository) State(ctx context.Context, path string) (domain.GitState, e
 	if err := validateAbsoluteDirectory(op, "path", path); err != nil {
 		return domain.GitStateUnknown, err
 	}
+	isRoot, err := isWorktreeRoot(path)
+	if err != nil {
+		return domain.GitStateUnknown, domain.ResourceError(domain.ErrorCodeInternal, op, path, "inspect git worktree marker", err)
+	}
+	if !isRoot {
+		return domain.GitStateNotRepository, nil
+	}
 	output, err := r.runner.Run(ctx, Command{
 		Directory: path,
 		Name:      "git",
@@ -183,21 +190,42 @@ func (r *Repository) State(ctx context.Context, path string) (domain.GitState, e
 	return domain.GitStateDirty, nil
 }
 
-// Pull updates a repository only when its worktree is clean.
+// Pull updates a clean repository only when its current branch has an upstream.
+// Repositories without a commit, attached branch, or upstream are valid project
+// folders, but have no unambiguous pull target.
 func (r *Repository) Pull(ctx context.Context, path string) error {
 	const op = "git.pull"
-	state, err := r.State(ctx, path)
-	if err != nil {
+	if err := validateAbsoluteDirectory(op, "path", path); err != nil {
 		return err
 	}
-	switch state {
-	case domain.GitStateNotRepository:
-		return domain.ResourceError(domain.ErrorCodeNotFound, op, path, "path is not a git worktree", nil)
-	case domain.GitStateDirty:
-		return domain.ResourceError(domain.ErrorCodeConflict, op, path, "worktree has uncommitted changes", nil)
+	isRoot, err := isWorktreeRoot(path)
+	if err != nil {
+		return domain.ResourceError(domain.ErrorCodeInternal, op, path, "inspect git worktree marker", err)
+	}
+	if !isRoot {
+		return nil
 	}
 
 	output, err := r.runner.Run(ctx, Command{
+		Directory: path,
+		Name:      "git",
+		Args:      []string{"status", "--porcelain=v2", "--branch"},
+	})
+	if err != nil {
+		if isNotRepository(output, err) {
+			return nil
+		}
+		return commandError(ctx, op, path, "inspect repository pull target", output, err)
+	}
+	dirty, canPull := pullStatus(output)
+	if dirty {
+		return domain.ResourceError(domain.ErrorCodeConflict, op, path, "worktree has uncommitted changes", nil)
+	}
+	if !canPull {
+		return nil
+	}
+
+	output, err = r.runner.Run(ctx, Command{
 		Directory: path,
 		Name:      "git",
 		Args:      []string{"pull", "--ff-only"},
@@ -206,6 +234,39 @@ func (r *Repository) Pull(ctx context.Context, path string) error {
 		return commandError(ctx, op, path, "pull repository", output, err)
 	}
 	return nil
+}
+
+func isWorktreeRoot(path string) (bool, error) {
+	_, err := os.Lstat(filepath.Join(path, ".git"))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
+func pullStatus(output []byte) (dirty, canPull bool) {
+	hasCommit := false
+	hasBranch := false
+	hasUpstream := false
+	for _, line := range strings.Split(string(output), "\n") {
+		switch {
+		case line == "":
+		case strings.HasPrefix(line, "# branch.oid "):
+			hasCommit = strings.TrimPrefix(line, "# branch.oid ") != "(initial)"
+		case strings.HasPrefix(line, "# branch.head "):
+			head := strings.TrimPrefix(line, "# branch.head ")
+			hasBranch = head != "" && head != "(detached)"
+		case strings.HasPrefix(line, "# branch.upstream "):
+			hasUpstream = strings.TrimPrefix(line, "# branch.upstream ") != ""
+		case strings.HasPrefix(line, "# "):
+		default:
+			dirty = true
+		}
+	}
+	return dirty, hasCommit && hasBranch && hasUpstream
 }
 
 type WorktreeOptions struct {

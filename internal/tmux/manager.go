@@ -183,6 +183,9 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 			return result, m.verification("tmux.ensure_main_session", "session creation was not observable", err)
 		}
 	}
+	if err := m.enableFocusEvents(ctx); err != nil {
+		return result, err
+	}
 
 	windows, err := m.taggedWindows(ctx)
 	if err != nil {
@@ -193,6 +196,7 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 		return result, err
 	}
 	repaired := false
+	startDashboardInCaller := false
 	dashboardCreated := false
 	if dashboard == nil {
 		if created && len(windows) > 0 {
@@ -274,39 +278,59 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 			needsRespawn = true
 		}
 		if dashboardPane != nil && needsRespawn {
-			wasLive := !dashboardPane.Dead
-			preRespawnPID := dashboardPane.PID
-			if err := m.client.RespawnPane(ctx, dashboardPane.ID, m.dashboardPaneCommand); err != nil {
-				return result, m.failure("tmux.ensure_main_session", "respawn dashboard pane", err)
+			callerPaneID, insideTmux, callerErr := m.callerPane("tmux.ensure_main_session")
+			if callerErr == nil && insideTmux && callerPaneID == dashboardPane.ID && !dashboardPane.Dead {
+				startDashboardInCaller = true
+				repaired = true
+			} else {
+				wasLive := !dashboardPane.Dead
+				preRespawnPID := dashboardPane.PID
+				if err := m.client.RespawnPane(ctx, dashboardPane.ID, m.dashboardPaneCommand); err != nil {
+					return result, m.failure("tmux.ensure_main_session", "respawn dashboard pane", err)
+				}
+				verified, err := m.paneByID(ctx, dashboard.ID, dashboardPane.ID)
+				if err != nil || verified == nil || verified.Dead || verified.PID <= 0 || (wasLive && verified.PID == preRespawnPID) {
+					return result, m.verification("tmux.ensure_main_session", "dashboard respawn was not observable", err)
+				}
+				dashboardPane = verified
+				if err := m.verifyPaneCommand(ctx, dashboard.ID, dashboardPane.ID, m.config.DashboardCommand); err != nil {
+					return result, err
+				}
+				startDashboard = false
+				repaired = true
 			}
-			verified, err := m.paneByID(ctx, dashboard.ID, dashboardPane.ID)
-			if err != nil || verified == nil || verified.Dead || verified.PID <= 0 || (wasLive && verified.PID == preRespawnPID) {
-				return result, m.verification("tmux.ensure_main_session", "dashboard respawn was not observable", err)
-			}
-			dashboardPane = verified
-			if err := m.verifyPaneCommand(ctx, dashboard.ID, dashboardPane.ID, m.config.DashboardCommand); err != nil {
-				return result, err
-			}
-			startDashboard = false
-			repaired = true
 		}
 	} else if dashboardCreated {
 		dashboardPane = &panes[0]
 	} else {
 		var candidates []*paneState
 		for i := range panes {
-			if !panes[i].Dead && paneRunsCommand(panes[i], m.config.DashboardCommand) {
+			if panes[i].Dead || panes[i].PID <= 0 {
+				continue
+			}
+			running, processErr := m.dashboardProcessAlive(ctx, int(panes[i].PID), m.config.DashboardCommand)
+			if processErr != nil {
+				return result, m.failure("tmux.ensure_main_session", "inspect untracked dashboard process", processErr)
+			}
+			if running {
 				candidates = append(candidates, &panes[i])
 			}
 		}
-		if len(candidates) != 1 {
-			return result, m.verification("tmux.ensure_main_session", "dashboard pane identity is ambiguous; refusing to replace an untracked pane", nil)
+		if len(candidates) == 0 && len(panes) == 1 {
+			callerPaneID, insideTmux, callerErr := m.callerPane("tmux.ensure_main_session")
+			if callerErr == nil && insideTmux && callerPaneID == panes[0].ID {
+				dashboardPane = &panes[0]
+				startDashboardInCaller = true
+				repaired = true
+			}
 		}
-		dashboardPane = candidates[0]
-		if err := m.verifyPaneCommand(ctx, dashboard.ID, dashboardPane.ID, m.config.DashboardCommand); err != nil {
-			return result, err
+		if dashboardPane == nil {
+			if len(candidates) != 1 {
+				return result, m.verification("tmux.ensure_main_session", "dashboard pane identity is ambiguous; refusing to replace an untracked pane", nil)
+			}
+			dashboardPane = candidates[0]
+			repaired = true
 		}
-		repaired = true
 	}
 	if trackingComplete && dashboardPane == nil {
 		before := panes
@@ -386,7 +410,9 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 	if snapshot.Session == nil {
 		return result, m.verification("tmux.ensure_main_session", "session disappeared after reconciliation", nil)
 	}
-	result = domain.EnsureMainSessionResult{Session: *snapshot.Session, Created: created, Repaired: repaired}
+	result = domain.EnsureMainSessionResult{
+		Session: *snapshot.Session, Created: created, Repaired: repaired, StartDashboard: startDashboardInCaller,
+	}
 	return result, nil
 }
 
@@ -918,6 +944,25 @@ func (m *Manager) setAndVerifyWindowOption(ctx context.Context, windowID, key, v
 	return nil
 }
 
+func (m *Manager) enableFocusEvents(ctx context.Context) error {
+	const key = "focus-events"
+	value, exists, err := m.client.ServerOption(ctx, key)
+	if err != nil {
+		return m.failure("tmux.ensure_main_session", "read focus-events", err)
+	}
+	if exists && trimLineEndings(value) == "on" {
+		return nil
+	}
+	if err := m.client.SetServerOption(ctx, key, "on"); err != nil {
+		return m.failure("tmux.ensure_main_session", "enable focus-events", err)
+	}
+	value, exists, err = m.client.ServerOption(ctx, key)
+	if err != nil || !exists || trimLineEndings(value) != "on" {
+		return m.verification("tmux.ensure_main_session", "focus-events mutation was not observable", err)
+	}
+	return nil
+}
+
 func (m *Manager) verifyPaneCommand(ctx context.Context, windowID, paneID, command string) error {
 	return m.verifyPaneCommands(ctx, windowID, paneID, command)
 }
@@ -1249,10 +1294,6 @@ func mapPane(pane paneState) domain.TmuxPane {
 
 func isSingleToken(command string) bool {
 	return command != "" && !strings.ContainsAny(command, " \t\r\n")
-}
-
-func paneRunsCommand(pane paneState, command string) bool {
-	return pane.CurrentCommand == commandExecutable(command)
 }
 
 func commandExecutable(command string) string {

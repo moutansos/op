@@ -118,7 +118,17 @@ func NewLauncherWithRunner(options Options, runner CommandRunner) (*Launcher, er
 }
 
 func (l *Launcher) LaunchNvim(ctx context.Context, path string) error {
-	return l.run(ctx, "process.nvim", path, "nvim", ".")
+	const op = "process.nvim"
+	if err := validateWorkingDirectory(op, path); err != nil {
+		return err
+	}
+	args := append([]string(nil), l.preferredShell.Args...)
+	args = append(args, persistentPreferredShellArgs(l.preferredShell, "nvim .")...)
+	return l.runCommand(ctx, op, Command{
+		Directory: path,
+		Name:      l.preferredShell.Name,
+		Args:      args,
+	})
 }
 
 func (l *Launcher) LaunchCode(ctx context.Context, path string) error {
@@ -216,6 +226,19 @@ func preferredShellArgs(shell, command string) []string {
 	default:
 		return []string{"-ic", command}
 	}
+}
+
+func persistentPreferredShellArgs(shell Command, command string) []string {
+	args := preferredShellArgs(shell.Name, command)
+	if len(args) == 0 || args[0] != "-ic" {
+		return args
+	}
+	restart := append([]string{shell.Name}, shell.Args...)
+	for index := range restart {
+		restart[index] = quoteForShell(restart[index])
+	}
+	args[len(args)-1] += "; exec " + strings.Join(restart, " ")
+	return args
 }
 
 func quoteForShell(value string) string {

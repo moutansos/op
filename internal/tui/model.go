@@ -135,6 +135,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay != noOverlay {
 			return m, nil
 		}
+		m.section = projectsSection
 		if m.projects.FilterState() == list.Unfiltered {
 			m.projects.SetFilterText("")
 		}
@@ -298,6 +299,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateActions(key)
 	}
 	if m.overlay == noOverlay && m.section == projectsSection && m.projects.SettingFilter() {
+		if key.String() == "enter" {
+			m.projectFilterGeneration++
+			m.projects.SetFilterText(m.projects.FilterValue())
+			return m.startOpen()
+		}
 		return m.updateProjects(key)
 	}
 
@@ -360,9 +366,13 @@ func (m Model) startOpen() (tea.Model, tea.Cmd) {
 		m.setError("Operation busy", errors.New(m.operation+" is still running"))
 		return m, nil
 	}
+	projectID := project.ID
+	m.projectFilterGeneration++
+	m.projects.ResetFilter()
+	m.finishProjectSelection(projectID, true)
 	m.operation = "open"
 	m.setStatus("Opening " + project.Name + "...")
-	return m, m.openProjectCmd(project.ID)
+	return m, m.openProjectCmd(projectID)
 }
 
 func (m Model) updateActions(key tea.KeyMsg) (tea.Model, tea.Cmd) {

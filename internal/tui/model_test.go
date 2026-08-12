@@ -215,8 +215,12 @@ func TestWindowFocusPreservesAppliedProjectFilter(t *testing.T) {
 		domain.Project{ID: "two", Name: "dotfiles", Path: "/home/me/.config/nvim"},
 	)
 	model.projects.SetFilterText("api")
+	model.section = statsSection
 
 	model = updateTestModel(model, tea.FocusMsg{})
+	if model.section != projectsSection {
+		t.Fatalf("section after focus = %d, want projects", model.section)
+	}
 	if !model.projects.SettingFilter() {
 		t.Fatal("window focus did not re-enter filter mode")
 	}
@@ -225,6 +229,14 @@ func TestWindowFocusPreservesAppliedProjectFilter(t *testing.T) {
 	}
 	if got := visibleProjectIDs(model); !slices.Equal(got, []string{"one"}) {
 		t.Fatalf("visible project IDs after focus = %v, want [one]", got)
+	}
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyEsc})
+	if model.projects.SettingFilter() {
+		t.Fatal("escape did not leave filter mode")
+	}
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyTab})
+	if model.section != statsSection {
+		t.Fatalf("section after escape and tab = %d, want stats", model.section)
 	}
 }
 
@@ -423,6 +435,13 @@ func TestEnterSchedulesOpenWithoutIODuringUpdate(t *testing.T) {
 	if cmd == nil || model.operation != "open" {
 		t.Fatal("enter did not schedule an open operation")
 	}
+	if model.projects.FilterValue() != "" || model.projects.FilterState() != list.Unfiltered {
+		t.Fatalf("project filter was not cleared: value=%q state=%d", model.projects.FilterValue(), model.projects.FilterState())
+	}
+	view := model.View()
+	if !strings.Contains(view, "Opening Project") || !strings.Contains(view, "Opening alpha...") {
+		t.Fatalf("opening view did not show centered loading message:\n%s", view)
+	}
 	message := cmd()
 	if service.openCalls != 1 {
 		t.Fatalf("OpenProject calls after command = %d, want 1", service.openCalls)
@@ -433,6 +452,34 @@ func TestEnterSchedulesOpenWithoutIODuringUpdate(t *testing.T) {
 	result, ok := message.(openFinishedMsg)
 	if !ok || result.err != nil {
 		t.Fatalf("open command message = %#v", message)
+	}
+}
+
+func TestEnterSchedulesOpenWhileProjectFilterIsFocused(t *testing.T) {
+	service := &fakeService{}
+	model := loadProjectsForTest(testModel(service),
+		domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"},
+		domain.Project{ID: "p2", Name: "beta", Path: "/repos/beta"},
+	)
+	model = updateTestModel(model, tea.FocusMsg{})
+	if !model.projects.SettingFilter() {
+		t.Fatal("project filter is not focused")
+	}
+	model, _ = updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("beta")})
+
+	model, cmd := updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || model.operation != "open" {
+		t.Fatal("enter did not schedule an open while the project filter was focused")
+	}
+	if model.projects.FilterValue() != "" || model.projects.FilterState() != list.Unfiltered {
+		t.Fatalf("project filter was not cleared: value=%q state=%d", model.projects.FilterValue(), model.projects.FilterState())
+	}
+	if view := model.View(); !strings.Contains(view, "Opening beta...") {
+		t.Fatalf("opening view did not identify the filtered project:\n%s", view)
+	}
+	cmd()
+	if service.openCalls != 1 || service.openReq.ProjectID != "p2" {
+		t.Fatalf("open calls = %d, request = %#v", service.openCalls, service.openReq)
 	}
 }
 

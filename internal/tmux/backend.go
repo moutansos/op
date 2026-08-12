@@ -67,6 +67,8 @@ type tmuxClient interface {
 
 	SetWindowOption(context.Context, string, string, string) error
 	WindowOption(context.Context, string, string) (string, bool, error)
+	SetServerOption(context.Context, string, string) error
+	ServerOption(context.Context, string) (string, bool, error)
 	SessionOption(context.Context, string, string) (string, bool, error)
 
 	CurrentWindow(context.Context, string) (string, error)

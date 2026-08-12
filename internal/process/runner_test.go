@@ -40,7 +40,7 @@ func TestBuiltInLaunchCommands(t *testing.T) {
 		t.Fatalf("LaunchPreferredShell() error = %v", err)
 	}
 	want := []processrunner.Command{
-		{Directory: path, Name: "nvim", Args: []string{"."}},
+		{Directory: path, Name: "/usr/bin/zsh", Args: []string{"-ic", "nvim .; exec /usr/bin/zsh"}},
 		{Directory: path, Name: "code", Args: []string{"."}},
 		{Directory: path, Name: "/usr/bin/zsh"},
 	}
@@ -63,11 +63,15 @@ func TestPreferredShellSupportsExecutableArguments(t *testing.T) {
 	if err := launcher.LaunchPreferredShell(context.Background(), "/repos/project"); err != nil {
 		t.Fatalf("LaunchPreferredShell() error = %v", err)
 	}
+	if err := launcher.LaunchNvim(context.Background(), "/repos/project"); err != nil {
+		t.Fatalf("LaunchNvim() error = %v", err)
+	}
 	if err := launcher.RunCustom(context.Background(), "status", "/repos/project"); err != nil {
 		t.Fatalf("RunCustom() error = %v", err)
 	}
 	want := []processrunner.Command{
 		{Directory: "/repos/project", Name: "/usr/bin/zsh", Args: []string{"-l", "--no-rcs"}},
+		{Directory: "/repos/project", Name: "/usr/bin/zsh", Args: []string{"-l", "--no-rcs", "-ic", "nvim .; exec /usr/bin/zsh -l --no-rcs"}},
 		{Directory: "/repos/project", Name: "/usr/bin/zsh", Args: []string{"-l", "--no-rcs", "-ic", "git status && printf done"}},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
@@ -173,14 +177,16 @@ func TestPowerShellUsesNativeInteractiveArguments(t *testing.T) {
 			RunInPreferredShell: true,
 		}},
 	})
+	if err := launcher.LaunchNvim(context.Background(), "/repos/project"); err != nil {
+		t.Fatalf("LaunchNvim() error = %v", err)
+	}
 	if err := launcher.RunCustom(context.Background(), "status", "/repos/project"); err != nil {
 		t.Fatalf("RunCustom() error = %v", err)
 	}
-	want := []processrunner.Command{{
-		Directory: "/repos/project",
-		Name:      "pwsh",
-		Args:      []string{"-NoExit", "-Command", "Get-Location"},
-	}}
+	want := []processrunner.Command{
+		{Directory: "/repos/project", Name: "pwsh", Args: []string{"-NoExit", "-Command", "nvim ."}},
+		{Directory: "/repos/project", Name: "pwsh", Args: []string{"-NoExit", "-Command", "Get-Location"}},
+	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("commands = %#v, want %#v", runner.commands, want)
 	}

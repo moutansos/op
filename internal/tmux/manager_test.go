@@ -48,6 +48,17 @@ func TestEnsureMainSessionCreatesAndVerifiesDashboard(t *testing.T) {
 	if len(result.Session.Windows) != 1 || result.Session.Windows[0].Panes[0].Dead {
 		t.Fatalf("session snapshot = %+v", result.Session)
 	}
+	if got := fake.serverOptions["focus-events"]; got != "on" {
+		t.Fatalf("focus-events = %q, want on", got)
+	}
+}
+
+func TestEnsureMainSessionRejectsUnobservedFocusEventsMutation(t *testing.T) {
+	fake := newFakeClient()
+	fake.silent["set-server-option"] = true
+
+	_, err := testManager(fake).EnsureMainSession(context.Background())
+	assertCode(t, err, domain.ErrorCodeDependency)
 }
 
 func TestEnsureMainSessionRejectsSilentSessionCreation(t *testing.T) {
@@ -119,7 +130,9 @@ func TestEnsureMainSessionDoesNotInjectIntoUntaggedNamedWindow(t *testing.T) {
 	user := fake.addWindow("user-op", 0, "op")
 	fake.panes[user.ID][0].CurrentCommand = "python"
 
-	_, err := testManager(fake).EnsureMainSession(context.Background())
+	manager := testManager(fake)
+	manager.dashboardProcessAlive = func(context.Context, int, string) (bool, error) { return false, nil }
+	_, err := manager.EnsureMainSession(context.Background())
 	assertCode(t, err, domain.ErrorCodeDependency)
 	if len(fake.windows) != 1 || fake.options[user.ID][optionRole] != "" || fake.panes[user.ID][0].CurrentCommand != "python" {
 		t.Fatalf("ambiguous named window was mutated: windows=%#v options=%#v panes=%#v", fake.windows, fake.options, fake.panes)
@@ -130,18 +143,85 @@ func TestEnsureMainSessionAdoptsRunningNamedDashboardWithoutDuplicate(t *testing
 	fake := newFakeClient()
 	fake.addSession("code")
 	dashboard := fake.addWindow("legacy-op", 0, "op")
-	fake.panes[dashboard.ID][0].CurrentCommand = "op"
+	pane := fake.panes[dashboard.ID][0]
+	pane.CurrentCommand = "bash"
+	originalPID := pane.PID
+	manager := testManager(fake)
+	manager.dashboardProcessAlive = func(_ context.Context, rootPID int, command string) (bool, error) {
+		return rootPID == int(originalPID) && command == "op dashboard", nil
+	}
 
-	result, err := testManager(fake).EnsureMainSession(context.Background())
+	result, err := manager.EnsureMainSession(context.Background())
 	if err != nil {
 		t.Fatalf("EnsureMainSession() error = %v", err)
 	}
 	if len(result.Session.Windows) != 1 || fake.options[dashboard.ID][optionRole] != roleDashboard {
 		t.Fatalf("running dashboard was not adopted: result=%+v options=%#v", result, fake.options)
 	}
-	pane := fake.panes[dashboard.ID][0]
+	if pane.PID != originalPID || pane.CurrentCommand != "bash" {
+		t.Fatalf("running wrapped dashboard was restarted: pane=%+v, original PID=%d", pane, originalPID)
+	}
 	if fake.options[dashboard.ID][optionDashboardPane] != pane.ID || fake.options[dashboard.ID][optionDashboardPID] != strconv.FormatInt(int64(pane.PID), 10) {
 		t.Fatalf("adopted identity = %#v, pane=%+v", fake.options[dashboard.ID], pane)
+	}
+}
+
+func TestEnsureMainSessionStartsDashboardInSoleUntrackedCallerPane(t *testing.T) {
+	fake := newFakeClient()
+	fake.addSession("code")
+	dashboard := fake.addWindow("legacy-op", 0, "op")
+	pane := fake.panes[dashboard.ID][0]
+	originalPID := pane.PID
+	manager := testManager(fake)
+	manager.dashboardProcessAlive = func(context.Context, int, string) (bool, error) { return false, nil }
+	manager.lookupEnv = callerEnvironment("/tmp/tmux/default,123,0", pane.ID)
+
+	result, err := manager.EnsureMainSession(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureMainSession() error = %v", err)
+	}
+	if !result.Repaired || result.Created || !result.StartDashboard || pane.PID != originalPID || pane.CurrentCommand != "sh" {
+		t.Fatalf("untracked caller pane adoption = %+v; pane=%+v, original PID=%d", result, pane, originalPID)
+	}
+	if fake.options[dashboard.ID][optionDashboardPane] != pane.ID || fake.options[dashboard.ID][optionDashboardPID] != strconv.FormatInt(int64(pane.PID), 10) {
+		t.Fatalf("restarted identity = %#v, pane=%+v", fake.options[dashboard.ID], pane)
+	}
+}
+
+func TestEnsureMainSessionStartsDashboardInTrackedIdleCallerPane(t *testing.T) {
+	fake := managedFake()
+	dashboard := fake.windowNamed("op")
+	pane := fake.panes[dashboard.ID][0]
+	originalPID := pane.PID
+	manager := testManager(fake)
+	manager.dashboardProcessAlive = func(context.Context, int, string) (bool, error) { return false, nil }
+	manager.lookupEnv = callerEnvironment("/tmp/tmux/default,123,0", pane.ID)
+
+	result, err := manager.EnsureMainSession(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureMainSession() error = %v", err)
+	}
+	if !result.StartDashboard || !result.Repaired || pane.PID != originalPID || pane.CurrentCommand != "sh" {
+		t.Fatalf("tracked caller pane restart = %+v; pane=%+v, original PID=%d", result, pane, originalPID)
+	}
+}
+
+func TestEnsureMainSessionDoesNotChooseCallerFromAmbiguousUntrackedDashboardPanes(t *testing.T) {
+	fake := newFakeClient()
+	fake.addSession("code")
+	dashboard := fake.addWindow("legacy-op", 0, "op")
+	first := fake.panes[dashboard.ID][0]
+	if err := fake.SplitPane(context.Background(), first.ID, "/repo", "zsh"); err != nil {
+		t.Fatal(err)
+	}
+	manager := testManager(fake)
+	manager.dashboardProcessAlive = func(context.Context, int, string) (bool, error) { return false, nil }
+	manager.lookupEnv = callerEnvironment("/tmp/tmux/default,123,0", first.ID)
+
+	_, err := manager.EnsureMainSession(context.Background())
+	assertCode(t, err, domain.ErrorCodeDependency)
+	if fake.options[dashboard.ID][optionDashboardPane] != "" || first.CurrentCommand != "sh" {
+		t.Fatalf("ambiguous caller pane was adopted: options=%#v panes=%#v", fake.options[dashboard.ID], fake.panes[dashboard.ID])
 	}
 }
 
@@ -152,7 +232,9 @@ func TestEnsureMainSessionRejectsAmbiguousOwnedNamedDashboard(t *testing.T) {
 	fake.options[dashboard.ID][optionOwner] = "1"
 	fake.panes[dashboard.ID][0].CurrentCommand = "python"
 
-	_, err := testManager(fake).EnsureMainSession(context.Background())
+	manager := testManager(fake)
+	manager.dashboardProcessAlive = func(context.Context, int, string) (bool, error) { return false, nil }
+	_, err := manager.EnsureMainSession(context.Background())
 	assertCode(t, err, domain.ErrorCodeDependency)
 	if fake.options[dashboard.ID][optionRole] != "" || fake.options[dashboard.ID][optionDashboardPane] != "" || fake.panes[dashboard.ID][0].CurrentCommand != "python" {
 		t.Fatalf("ambiguous owned dashboard was mutated: options=%#v panes=%#v", fake.options, fake.panes)
@@ -167,7 +249,9 @@ func TestEnsureMainSessionRejectsAmbiguousRoleDashboard(t *testing.T) {
 	fake.options[dashboard.ID][optionOwner] = "1"
 	fake.panes[dashboard.ID][0].CurrentCommand = "nvim"
 
-	_, err := testManager(fake).EnsureMainSession(context.Background())
+	manager := testManager(fake)
+	manager.dashboardProcessAlive = func(context.Context, int, string) (bool, error) { return false, nil }
+	_, err := manager.EnsureMainSession(context.Background())
 	assertCode(t, err, domain.ErrorCodeDependency)
 	if fake.options[dashboard.ID][optionDashboardPane] != "" || fake.options[dashboard.ID][optionDashboardPID] != "" || fake.panes[dashboard.ID][0].CurrentCommand != "nvim" {
 		t.Fatalf("ambiguous role dashboard was mutated: options=%#v panes=%#v", fake.options, fake.panes)
@@ -1291,6 +1375,7 @@ type fakeClient struct {
 	windowOrder              []string
 	panes                    map[string][]*paneState
 	options                  map[string]map[string]string
+	serverOptions            map[string]string
 	sessionOptions           map[string]string
 	splitShell               map[string]string
 	silent                   map[string]bool
@@ -1323,7 +1408,7 @@ type fakeClient struct {
 func newFakeClient() *fakeClient {
 	return &fakeClient{
 		windows: make(map[string]*windowState), panes: make(map[string][]*paneState),
-		options: make(map[string]map[string]string), sessionOptions: make(map[string]string),
+		options: make(map[string]map[string]string), serverOptions: make(map[string]string), sessionOptions: make(map[string]string),
 		splitShell: make(map[string]string), silent: make(map[string]bool),
 		clients: make(map[string]*clientState), clientSessions: make(map[string]string), paneSessions: make(map[string]string),
 	}
@@ -1645,6 +1730,20 @@ func (f *fakeClient) SetWindowOption(_ context.Context, windowID, key, value str
 func (f *fakeClient) WindowOption(_ context.Context, windowID, key string) (string, bool, error) {
 	f.check("window-option")
 	value, exists := f.options[windowID][key]
+	return value, exists, nil
+}
+
+func (f *fakeClient) SetServerOption(_ context.Context, key, value string) error {
+	f.check("set-server-option")
+	if !f.silent["set-server-option"] {
+		f.serverOptions[key] = value
+	}
+	return nil
+}
+
+func (f *fakeClient) ServerOption(_ context.Context, key string) (string, bool, error) {
+	f.check("server-option")
+	value, exists := f.serverOptions[key]
 	return value, exists, nil
 }
 

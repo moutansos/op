@@ -353,6 +353,15 @@ func (c *commandClient) WindowOption(ctx context.Context, windowID, key string) 
 	return c.option(ctx, []string{"show-options", "-qv", "-w", "-t", windowID, key})
 }
 
+func (c *commandClient) SetServerOption(ctx context.Context, key, value string) error {
+	_, err := c.raw.runMutation(ctx, "set-option", "-s", key, value)
+	return err
+}
+
+func (c *commandClient) ServerOption(ctx context.Context, key string) (string, bool, error) {
+	return c.option(ctx, []string{"show-options", "-qv", "-s", key})
+}
+
 func (c *commandClient) SessionOption(ctx context.Context, session, key string) (string, bool, error) {
 	return c.option(ctx, []string{"show-options", "-qv", "-t", session, key})
 }

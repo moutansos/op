@@ -33,6 +33,7 @@ type fakeService struct {
 	openRequest     domain.OpenProjectRequest
 	createRequest   domain.CreateProjectRequest
 	worktreeRequest domain.CreateWorktreeRequest
+	ensureResult    domain.EnsureMainSessionResult
 	err             error
 }
 
@@ -69,7 +70,7 @@ func (f *fakeService) RunProjectAction(_ context.Context, request domain.RunProj
 
 func (f *fakeService) EnsureMainSession(context.Context) (domain.EnsureMainSessionResult, error) {
 	f.ensureCalls++
-	return domain.EnsureMainSessionResult{}, f.err
+	return f.ensureResult, f.err
 }
 
 func (f *fakeService) GetTmuxSnapshot(context.Context) (domain.TmuxSnapshot, error) {
@@ -205,6 +206,18 @@ func TestDefaultDispatchEnsuresAndAttachesWithAbsoluteDashboardCommand(t *testin
 	}
 	if runtime.appOptions.EnableRepositoryUpdates || runtime.appOptions.DashboardCommand != "/opt/op --config /config/config.json --no-repo-update dashboard" {
 		t.Fatalf("app options = %+v", runtime.appOptions)
+	}
+}
+
+func TestDefaultDispatchRunsDashboardInInvokingPaneWhenRequested(t *testing.T) {
+	runtime := newTestRuntime()
+	runtime.service.ensureResult.StartDashboard = true
+	code := Run(context.Background(), nil, runtime.options())
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if runtime.service.ensureCalls != 1 || runtime.service.attachCalls != 0 || runtime.tuiCalls != 1 {
+		t.Fatalf("ensure=%d attach=%d tui=%d", runtime.service.ensureCalls, runtime.service.attachCalls, runtime.tuiCalls)
 	}
 }
 

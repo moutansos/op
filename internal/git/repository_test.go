@@ -231,6 +231,9 @@ func TestStateUsesPorcelainForNormalAndLinkedWorktrees(t *testing.T) {
 			runner := &fakeRunner{responses: []commandResponse{{output: output}}}
 			repository := gitrepo.NewRepositoryWithRunner(runner)
 			path := filepath.Join(t.TempDir(), "worktree")
+			if err := os.MkdirAll(filepath.Join(path, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 
 			state, err := repository.State(context.Background(), path)
 			if err != nil {
@@ -253,10 +256,7 @@ func TestStateUsesPorcelainForNormalAndLinkedWorktrees(t *testing.T) {
 }
 
 func TestStateRecognizesNonRepository(t *testing.T) {
-	runner := &fakeRunner{responses: []commandResponse{{
-		output: []byte("fatal: not a git repository (or any parent up to mount point)"),
-		err:    errors.New("exit status 128"),
-	}}}
+	runner := &fakeRunner{}
 	state, err := gitrepo.NewRepositoryWithRunner(runner).State(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatalf("State() error = %v", err)
@@ -264,30 +264,107 @@ func TestStateRecognizesNonRepository(t *testing.T) {
 	if state != domain.GitStateNotRepository {
 		t.Fatalf("State() = %q, want %q", state, domain.GitStateNotRepository)
 	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("State() inspected an ancestor repository: %#v", runner.commands)
+	}
 }
 
-func TestPullOnlyRunsForCleanWorktree(t *testing.T) {
+func TestPullOnlyRunsForCleanBranchWithUpstream(t *testing.T) {
 	path := t.TempDir()
-	runner := &fakeRunner{responses: []commandResponse{{}, {}}}
+	if err := os.Mkdir(filepath.Join(path, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	status := []byte("# branch.oid abc123\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n")
+	runner := &fakeRunner{responses: []commandResponse{{output: status}, {}}}
 	repository := gitrepo.NewRepositoryWithRunner(runner)
 
 	if err := repository.Pull(context.Background(), path); err != nil {
 		t.Fatalf("Pull() error = %v", err)
 	}
 	assertCommands(t, runner.commands, []gitrepo.Command{
-		{Directory: path, Name: "git", Args: []string{"status", "--porcelain"}},
+		{Directory: path, Name: "git", Args: []string{"status", "--porcelain=v2", "--branch"}},
 		{Directory: path, Name: "git", Args: []string{"pull", "--ff-only"}},
+	})
+}
+
+func TestPullSkipsProjectsWithoutPullTarget(t *testing.T) {
+	tests := map[string][]byte{
+		"unborn repository":           []byte("# branch.oid (initial)\n# branch.head main\n"),
+		"repository with no upstream": []byte("# branch.oid abc123\n# branch.head main\n"),
+		"detached head":               []byte("# branch.oid abc123\n# branch.head (detached)\n"),
+	}
+	for name, status := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := t.TempDir()
+			if err := os.Mkdir(filepath.Join(path, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			runner := &fakeRunner{responses: []commandResponse{{output: status}}}
+			if err := gitrepo.NewRepositoryWithRunner(runner).Pull(context.Background(), path); err != nil {
+				t.Fatalf("Pull() error = %v", err)
+			}
+			assertCommands(t, runner.commands, []gitrepo.Command{{
+				Directory: path, Name: "git", Args: []string{"status", "--porcelain=v2", "--branch"},
+			}})
+		})
+	}
+}
+
+func TestPullSkipsRawFolderWithoutInspectingAncestorRepository(t *testing.T) {
+	path := t.TempDir()
+	runner := &fakeRunner{}
+	if err := gitrepo.NewRepositoryWithRunner(runner).Pull(context.Background(), path); err != nil {
+		t.Fatalf("Pull() error = %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("Pull() inspected an ancestor repository: %#v", runner.commands)
+	}
+}
+
+func TestPullAcceptsRealProjectsWithoutPullTargets(t *testing.T) {
+	repository := gitrepo.NewRepository()
+
+	t.Run("raw folder", func(t *testing.T) {
+		if err := repository.Pull(context.Background(), t.TempDir()); err != nil {
+			t.Fatalf("Pull() error = %v", err)
+		}
+	})
+
+	t.Run("unborn repository", func(t *testing.T) {
+		path := t.TempDir()
+		runGit(t, path, "init")
+		if err := repository.Pull(context.Background(), path); err != nil {
+			t.Fatalf("Pull() error = %v", err)
+		}
+	})
+
+	t.Run("local branch without upstream", func(t *testing.T) {
+		path := initializedRepository(t)
+		if err := repository.Pull(context.Background(), path); err != nil {
+			t.Fatalf("Pull() error = %v", err)
+		}
+	})
+
+	t.Run("detached head", func(t *testing.T) {
+		path := initializedRepository(t)
+		runGit(t, path, "checkout", "--detach")
+		if err := repository.Pull(context.Background(), path); err != nil {
+			t.Fatalf("Pull() error = %v", err)
+		}
 	})
 }
 
 func TestPullRejectsDirtyWorktreeWithoutPulling(t *testing.T) {
 	path := t.TempDir()
-	runner := &fakeRunner{responses: []commandResponse{{output: []byte(" M file.go\n")}}}
+	if err := os.Mkdir(filepath.Join(path, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{responses: []commandResponse{{output: []byte("# branch.oid abc123\n# branch.head main\n1 .M N... 100644 100644 100644 abc123 abc123 file.go\n")}}}
 	err := gitrepo.NewRepositoryWithRunner(runner).Pull(context.Background(), path)
 	if !domain.IsCode(err, domain.ErrorCodeConflict) {
 		t.Fatalf("Pull() error = %v, want conflict", err)
 	}
-	if len(runner.commands) != 1 || !reflect.DeepEqual(runner.commands[0].Args, []string{"status", "--porcelain"}) {
+	if len(runner.commands) != 1 || !reflect.DeepEqual(runner.commands[0].Args, []string{"status", "--porcelain=v2", "--branch"}) {
 		t.Fatalf("dirty Pull() commands = %#v", runner.commands)
 	}
 }
@@ -367,4 +444,27 @@ func contains(value, fragment string) bool {
 		}
 	}
 	return false
+}
+
+func initializedRepository(t *testing.T) string {
+	t.Helper()
+	path := t.TempDir()
+	runGit(t, path, "init")
+	runGit(t, path, "config", "user.email", "test@example.com")
+	runGit(t, path, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(path, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, path, "add", "README.md")
+	runGit(t, path, "commit", "-m", "initial")
+	return path
+}
+
+func runGit(t *testing.T, directory string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = directory
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
+	}
 }

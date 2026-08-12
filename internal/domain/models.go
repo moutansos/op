@@ -91,9 +91,10 @@ type RunProjectActionResult struct {
 }
 
 type EnsureMainSessionResult struct {
-	Session  TmuxSession `json:"session"`
-	Created  bool        `json:"created"`
-	Repaired bool        `json:"repaired"`
+	Session        TmuxSession `json:"session"`
+	Created        bool        `json:"created"`
+	Repaired       bool        `json:"repaired"`
+	StartDashboard bool        `json:"startDashboard,omitempty"`
 }
 
 // TmuxSnapshot deliberately contains no gotmux types.

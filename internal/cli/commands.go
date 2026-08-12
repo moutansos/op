@@ -53,8 +53,12 @@ func (r *runner) runDefault(ctx context.Context) error {
 			return r.chooseProjectAction(ctx, service, project)
 		}
 	}
-	if _, err := service.EnsureMainSession(ctx); err != nil {
+	ensured, err := service.EnsureMainSession(ctx)
+	if err != nil {
 		return err
+	}
+	if ensured.StartDashboard {
+		return r.runDashboardTUI(ctx, service)
 	}
 	return service.AttachOrSwitch(ctx)
 }
@@ -101,6 +105,10 @@ func (r *runner) runDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	return r.runDashboardTUI(ctx, service)
+}
+
+func (r *runner) runDashboardTUI(ctx context.Context, service Service) error {
 	actions := make([]tui.Action, 0, len(r.config.CustomCommands))
 	for _, command := range r.config.CustomCommands {
 		actions = append(actions, tui.Action{Name: command.Name, ID: command.Name})

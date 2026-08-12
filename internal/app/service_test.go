@@ -566,6 +566,7 @@ func TestOpenProjectPullPolicyAndCleanliness(t *testing.T) {
 	}{
 		{name: "clean and enabled", state: domain.GitStateClean, enabled: true, wantState: 1, wantPull: 1},
 		{name: "dirty", state: domain.GitStateDirty, enabled: true, wantState: 1},
+		{name: "raw folder", state: domain.GitStateNotRepository, enabled: true, wantState: 1},
 		{name: "globally disabled", state: domain.GitStateClean},
 		{name: "request disabled", state: domain.GitStateClean, enabled: true, ctx: func() context.Context { return app.WithoutRepositoryUpdates(context.Background()) }},
 	}

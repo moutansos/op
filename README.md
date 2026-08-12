@@ -144,8 +144,10 @@ uses Bubble Tea/Bubbles, invokes no external `fzf`, and restores the terminal be
 selected action. `--no-target` bypasses the selector and returns to the managed dashboard.
 
 Opening an existing project selects its healthy tagged window. `--new-instance` creates a suffixed
-additional window. A normal local `open` fast-forward pulls a clean Git worktree before opening it;
-dirty worktrees and custom entries are not pulled. Use `--no-repo-update` to suppress the pull.
+additional window. A normal local `open` fast-forward pulls a clean Git worktree before opening it
+when its current branch has an upstream. Raw folders, unborn repositories, detached HEADs, branches
+without upstreams, dirty worktrees, and custom entries open without pulling. Use `--no-repo-update`
+to suppress the pull.
 
 ## Dashboard
 
@@ -166,13 +168,13 @@ Keys:
 | `tab`, `shift+tab`   | Move between dashboard sections or form fields.                                          |
 | `1`, `2`, `3`        | Focus Projects, System, or Tmux.                                                         |
 | `r`                  | Refresh all snapshots immediately.                                                       |
-| `esc`                | Cancel an action chooser or form.                                                        |
+| `esc`                | Leave filter mode or cancel an action chooser or form.                                   |
 | `q`, `ctrl+c`        | Exit the dashboard to its tmux pane's shell. Plain `op` restarts it on the next invocation. |
 
 Filtering uses project names, path names, full paths, and tags. It is fzf-style matching implemented
 with Bubble Tea/Bubbles and does not invoke `fzf`. The dashboard requests terminal focus reporting so
-returning to its window restores filter mode while preserving the current query. Under tmux, this
-requires `set -g focus-events on` in the tmux configuration.
+returning to its window restores the Projects section and filter mode while preserving the current
+query. `op` enables tmux focus events when it reconciles the managed session.
 
 Neovim, shell, and configured custom actions temporarily release the alternate screen while they own
 the terminal, then restore the dashboard when they exit. These terminal actions are not bounded by
@@ -483,8 +485,8 @@ run the user service after logout, an administrator or the user (where permitted
   tabbed mode.
 - **An editor/shell pane exits during setup:** run the configured command directly and verify it
   remains alive. Project-window creation rolls back if startup cannot be observed.
-- **Unexpected Git pull failure:** normal `op open` uses `git pull --ff-only` only for clean
-  repositories. Use `--no-repo-update` when opening offline or when no upstream is configured.
+- **Unexpected Git pull failure:** normal `op open` uses `git pull --ff-only` only for clean,
+  upstream-tracking branches. Use `--no-repo-update` when opening offline.
 - **Duplicate project name/conflict:** repository directory names and custom-entry names must be
   unique. Use IDs from `op projects` for scripts and remote calls.
 - **Unsafe name/path error mentioning `-:-`:** rename the configured directory or value; managed

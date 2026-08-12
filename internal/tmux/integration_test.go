@@ -146,6 +146,101 @@ func TestIntegrationDashboardAndProjectPaneLayout(t *testing.T) {
 	waitForPaneCommand(t, manager, dashboard.ID, "sleep")
 }
 
+func TestIntegrationAdoptsWrappedLegacyDashboardPane(t *testing.T) {
+	requireTmuxIntegration(t)
+	executable, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux is not installed")
+	}
+
+	root := t.TempDir()
+	socket := integrationSocket(t, executable)
+	raw := rawTmux{executable: executable, socket: socket}
+	if _, err := raw.run(context.Background(), "new-session", "-d", "-s", "code", "-n", "op", "sh -c 'sleep 300 & wait'"); err != nil {
+		t.Fatalf("create wrapped legacy dashboard: %v", err)
+	}
+
+	manager, err := New(context.Background(), ManagerConfig{
+		Session: "code", DashboardWindow: "op", Socket: socket, StartDirectory: root,
+		DashboardCommand: "sleep 300", EditorCommand: "sleep 300", PreferredShell: "sh",
+		ShellPaneRows: 10, DefaultProfile: "integration",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	windows, err := manager.client.ListWindows(context.Background(), "code")
+	if err != nil || len(windows) != 1 {
+		t.Fatalf("legacy windows = %+v, %v", windows, err)
+	}
+	panes, err := manager.client.ListPanes(context.Background(), windows[0].ID)
+	if err != nil || len(panes) != 1 {
+		t.Fatalf("legacy panes = %+v, %v", panes, err)
+	}
+	original := panes[0]
+
+	result, err := manager.EnsureMainSession(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureMainSession() error = %v", err)
+	}
+	if result.Created || !result.Repaired || len(result.Session.Windows) != 1 || len(result.Session.Windows[0].Panes) != 1 {
+		t.Fatalf("legacy dashboard adoption = %+v", result)
+	}
+	adopted := result.Session.Windows[0].Panes[0]
+	if adopted.ID != original.ID || adopted.PID != original.PID {
+		t.Fatalf("wrapped dashboard was restarted: before=%+v after=%+v", original, adopted)
+	}
+	managedPaneID, exists, err := manager.client.WindowOption(context.Background(), windows[0].ID, optionDashboardPane)
+	if err != nil || !exists || managedPaneID != original.ID {
+		t.Fatalf("managed dashboard pane = %q, %v, %v; want %q", managedPaneID, exists, err, original.ID)
+	}
+}
+
+func TestIntegrationStartsDashboardInSoleIdleLegacyCallerPane(t *testing.T) {
+	requireTmuxIntegration(t)
+	executable, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux is not installed")
+	}
+
+	root := t.TempDir()
+	socket := integrationSocket(t, executable)
+	raw := rawTmux{executable: executable, socket: socket}
+	if _, err := raw.run(context.Background(), "new-session", "-d", "-s", "code", "-n", "op"); err != nil {
+		t.Fatalf("create idle legacy dashboard: %v", err)
+	}
+
+	manager, err := New(context.Background(), ManagerConfig{
+		Session: "code", DashboardWindow: "op", Socket: socket, StartDirectory: root,
+		DashboardCommand: "sleep 300", EditorCommand: "sleep 300", PreferredShell: "sh",
+		ShellPaneRows: 10, DefaultProfile: "integration",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	windows, err := manager.client.ListWindows(context.Background(), "code")
+	if err != nil || len(windows) != 1 {
+		t.Fatalf("legacy windows = %+v, %v", windows, err)
+	}
+	panes, err := manager.client.ListPanes(context.Background(), windows[0].ID)
+	if err != nil || len(panes) != 1 {
+		t.Fatalf("legacy panes = %+v, %v", panes, err)
+	}
+	original := panes[0]
+	manager.lookupEnv = callerEnvironment(socket+",123,0", original.ID)
+
+	result, err := manager.EnsureMainSession(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureMainSession() error = %v", err)
+	}
+	if !result.StartDashboard || result.Created || !result.Repaired {
+		t.Fatalf("idle legacy dashboard adoption = %+v", result)
+	}
+	adopted := result.Session.Windows[0].Panes[0]
+	if adopted.ID != original.ID || adopted.PID != original.PID {
+		t.Fatalf("idle caller pane was respawned: before=%+v after=%+v", original, adopted)
+	}
+}
+
 func TestIntegrationShellStartupReadReceivesNoManagerInput(t *testing.T) {
 	manager, raw, _ := newDashboardIntegration(t)
 	root := manager.config.StartDirectory
