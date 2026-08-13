@@ -492,6 +492,9 @@ func (r rawTmux) runCommand(ctx context.Context, executable string, commandArgs,
 		if contextErr := ctx.Err(); contextErr != nil {
 			return "", fmt.Errorf("tmux %s: %w", strings.Join(shownArgs, " "), contextErr)
 		}
+		if errors.Is(err, exec.ErrWaitDelay) {
+			return stdout.String(), nil
+		}
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" {
 			detail = strings.TrimSpace(stdout.String())

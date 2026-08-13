@@ -75,6 +75,24 @@ func TestRawRunCancellationKillsProcessTreeAndPreventsLateMutation(t *testing.T)
 	}
 }
 
+func TestRawRunReturnsOutputWhenWaitDelayExpires(t *testing.T) {
+	root := t.TempDir()
+	executable := writeExecutable(t, root, "tmux-hold-stdout", "#!/bin/sh\n(sleep 1 &)\nprintf '%s\\n' '%32'\n")
+	raw := rawTmux{executable: executable}
+	started := time.Now()
+
+	output, err := raw.run(context.Background(), "list-panes", "-t", "@14", "-F", "#{pane_id}")
+	if err != nil {
+		t.Fatalf("held-stdout query error = %v, want captured output", err)
+	}
+	if got := strings.TrimSpace(output); got != "%32" {
+		t.Fatalf("held-stdout output = %q, want %q", got, "%32")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("held-stdout query exceeded WaitDelay bound: %v", elapsed)
+	}
+}
+
 func TestRawRunIncludesStderr(t *testing.T) {
 	root := t.TempDir()
 	executable := writeExecutable(t, root, "tmux-error", "#!/bin/sh\nprintf 'backend detail\\n' >&2\nexit 7\n")
