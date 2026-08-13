@@ -53,6 +53,9 @@ func (r *runner) runDefault(ctx context.Context) error {
 			return r.chooseProjectAction(ctx, service, project)
 		}
 	}
+	if !r.globals.noTarget {
+		return r.chooseProjectToOpen(ctx, service)
+	}
 	ensured, err := service.EnsureMainSession(ctx)
 	if err != nil {
 		return err
@@ -63,21 +66,44 @@ func (r *runner) runDefault(ctx context.Context) error {
 	return service.AttachOrSwitch(ctx)
 }
 
+func (r *runner) chooseProjectToOpen(ctx context.Context, service Service) error {
+	projects, err := service.ListProjects(ctx)
+	if err != nil {
+		return err
+	}
+	project, err := r.options.SelectProject(ctx, "open project", projects, r.options.Stdin, r.options.Stdout)
+	if err != nil {
+		return domain.NewError(domain.CodeOf(err), "cli.project", "select project", err)
+	}
+	if project == nil {
+		return nil
+	}
+	result, err := service.OpenProject(ctx, domain.OpenProjectRequest{ProjectID: project.ID, DeferSelection: true})
+	if err != nil {
+		return err
+	}
+	if result.Mode == domain.ProjectOpenModeGUI {
+		fmt.Fprintf(r.options.Stdout, "Opened %s with %s.\n", result.Project.Name, result.Profile)
+		return nil
+	}
+	return service.AttachOrSwitchTo(ctx, result.Window.ID)
+}
+
 func (r *runner) chooseProjectAction(ctx context.Context, service Service, project domain.Project) error {
 	actions := []tui.Action{
-		{Name: "Neovim", ID: actionpolicy.NvimID},
-		{Name: "Shell", ID: actionpolicy.ShellID},
+		{Name: "nvim", ID: actionpolicy.NvimID},
+		{Name: "cd-here", ID: actionpolicy.ShellID},
 	}
 	if r.config.Actions.GUIEditors {
-		actions = append(actions, tui.Action{Name: "VS Code", ID: actionpolicy.CodeID})
+		actions = append(actions, tui.Action{Name: "vs-code", ID: actionpolicy.CodeID})
 	}
 	for index, command := range r.config.CustomCommands {
 		if err := actionpolicy.ValidateCustomName(command.Name); err != nil {
 			return domain.FieldError(domain.ErrorCodeConfig, "cli.action", fmt.Sprintf("customCommands[%d].name", index), err.Error())
 		}
-		actions = append(actions, tui.Action{Name: command.Name, ID: command.Name})
+		actions = append(actions, tui.Action{Name: strings.ToLower(command.Name), ID: command.Name})
 	}
-	chosen, err := r.options.SelectAction(ctx, "Actions for "+project.Name, actions, r.options.Stdin, r.options.Stdout)
+	chosen, err := r.options.SelectAction(ctx, "actions for "+project.Name, actions, r.options.Stdin, r.options.Stdout)
 	if err != nil {
 		return domain.NewError(domain.CodeOf(err), "cli.action", "select project action", err)
 	}
@@ -109,17 +135,16 @@ func (r *runner) runDashboard(ctx context.Context, args []string) error {
 }
 
 func (r *runner) runDashboardTUI(ctx context.Context, service Service) error {
-	actions := make([]tui.Action, 0, len(r.config.CustomCommands))
-	for _, command := range r.config.CustomCommands {
-		actions = append(actions, tui.Action{Name: command.Name, ID: command.Name})
+	openers := make([]tui.ProjectOpener, 0, len(r.config.ProjectOpeners))
+	for _, opener := range r.config.ProjectOpeners {
+		openers = append(openers, tui.ProjectOpener{ID: opener.ID, Name: opener.Name, Mode: opener.Mode})
 	}
 	return r.options.RunTUI(ctx, service, tui.Options{
 		DefaultProfile:         r.config.Tmux.DefaultProfile,
-		GUIEditors:             r.config.Actions.GUIEditors,
+		ProjectOpeners:         openers,
 		ProjectRefreshInterval: r.config.Stats.TmuxRefreshInterval.Duration,
 		TmuxRefreshInterval:    r.config.Stats.TmuxRefreshInterval.Duration,
 		StatsRefreshInterval:   r.config.Stats.RefreshInterval.Duration,
-		Actions:                actions,
 	})
 }
 
@@ -209,7 +234,7 @@ func (r *runner) runOpen(ctx context.Context, args []string) error {
 		fmt.Fprintln(r.options.Stdout, "Usage: op open <project ID or exact name> [--profile NAME] [--new-instance]")
 	}
 	positionals, err := parseFlags("open", args, map[string]optionKind{"--profile": valueOption, "--new-instance": boolOption}, usage, func(set *flag.FlagSet) {
-		set.StringVar(&profile, "profile", "", "tmux profile")
+		set.StringVar(&profile, "profile", "", "project opener profile")
 		set.BoolVar(&newInstance, "new-instance", false, "create another project window")
 	})
 	if err != nil {
@@ -218,7 +243,11 @@ func (r *runner) runOpen(ctx context.Context, args []string) error {
 	if len(positionals) != 1 {
 		return usageError("open requires exactly one project ID or exact name")
 	}
-	service, err := r.getService(ctx, "git", "tmux")
+	dependencies := []string{"git"}
+	if r.profileUsesTmux(profile) {
+		dependencies = append(dependencies, "tmux")
+	}
+	service, err := r.getService(ctx, dependencies...)
 	if err != nil {
 		return err
 	}
@@ -229,6 +258,11 @@ func (r *runner) runOpen(ctx context.Context, args []string) error {
 	result, err := service.OpenProject(ctx, domain.OpenProjectRequest{ProjectID: project.ID, Profile: profile, NewInstance: newInstance})
 	if err != nil {
 		return err
+	}
+	if result.Mode == domain.ProjectOpenModeGUI {
+		fmt.Fprintf(r.options.Stdout, "Opened %s with %s", result.Project.Name, result.Profile)
+		fmt.Fprintln(r.options.Stdout)
+		return nil
 	}
 	fmt.Fprintf(r.options.Stdout, "Opened %s in window %s", result.Project.Name, result.Window.Name)
 	if result.Reused {
@@ -247,7 +281,7 @@ func (r *runner) runClone(ctx context.Context, args []string) error {
 	positionals, err := parseFlags("clone", args, map[string]optionKind{"--directory": valueOption, "--open": boolOption, "--profile": valueOption}, usage, func(set *flag.FlagSet) {
 		set.StringVar(&directory, "directory", "", "destination directory name")
 		set.BoolVar(&open, "open", false, "open after cloning")
-		set.StringVar(&profile, "profile", "", "tmux profile")
+		set.StringVar(&profile, "profile", "", "project opener profile")
 	})
 	if err != nil {
 		return err
@@ -259,7 +293,7 @@ func (r *runner) runClone(ctx context.Context, args []string) error {
 		return err
 	}
 	dependencies := []string{"git"}
-	if open {
+	if open && r.profileUsesTmux(profile) {
 		dependencies = append(dependencies, "tmux")
 	}
 	service, err := r.getService(ctx, dependencies...)
@@ -280,7 +314,7 @@ func (r *runner) runNew(ctx context.Context, args []string) error {
 	usage := func() { fmt.Fprintln(r.options.Stdout, "Usage: op new <name> [--open] [--profile NAME]") }
 	positionals, err := parseFlags("new", args, map[string]optionKind{"--open": boolOption, "--profile": valueOption}, usage, func(set *flag.FlagSet) {
 		set.BoolVar(&open, "open", false, "open after creating")
-		set.StringVar(&profile, "profile", "", "tmux profile")
+		set.StringVar(&profile, "profile", "", "project opener profile")
 	})
 	if err != nil {
 		return err
@@ -292,7 +326,7 @@ func (r *runner) runNew(ctx context.Context, args []string) error {
 		return err
 	}
 	dependencies := []string{"git"}
-	if open {
+	if open && r.profileUsesTmux(profile) {
 		dependencies = append(dependencies, "tmux")
 	}
 	service, err := r.getService(ctx, dependencies...)
@@ -316,7 +350,7 @@ func (r *runner) runWorktree(ctx context.Context, args []string) error {
 	positionals, err := parseFlags("worktree", args, map[string]optionKind{"--directory": valueOption, "--open": boolOption, "--profile": valueOption}, usage, func(set *flag.FlagSet) {
 		set.StringVar(&directory, "directory", "", "worktree directory name")
 		set.BoolVar(&open, "open", false, "open after creating")
-		set.StringVar(&profile, "profile", "", "tmux profile")
+		set.StringVar(&profile, "profile", "", "project opener profile")
 	})
 	if err != nil {
 		return err
@@ -328,7 +362,7 @@ func (r *runner) runWorktree(ctx context.Context, args []string) error {
 		return err
 	}
 	dependencies := []string{"git"}
-	if open {
+	if open && r.profileUsesTmux(profile) {
 		dependencies = append(dependencies, "tmux")
 	}
 	service, err := r.getService(ctx, dependencies...)
@@ -354,6 +388,18 @@ func validateProfileOption(profile string, open bool, op string) error {
 		return domain.FieldError(domain.ErrorCodeInvalidArgument, op, "profile", "requires --open")
 	}
 	return nil
+}
+
+func (r *runner) profileUsesTmux(profile string) bool {
+	if profile == "" {
+		profile = r.config.Tmux.DefaultProfile
+	}
+	for _, opener := range r.config.ProjectOpeners {
+		if opener.ID == profile {
+			return opener.Mode == domain.ProjectOpenModeTmux
+		}
+	}
+	return false
 }
 
 func resolveProject(ctx context.Context, service domain.Service, value string) (domain.Project, error) {

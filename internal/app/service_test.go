@@ -596,6 +596,55 @@ func TestOpenProjectPullPolicyAndCleanliness(t *testing.T) {
 	}
 }
 
+func TestOpenProjectDispatchesConfiguredGUIOpenerWithoutTmux(t *testing.T) {
+	cfg := testConfig()
+	cfg.ProjectOpeners = append(cfg.ProjectOpeners, config.ProjectOpener{
+		ID: "vscode", Name: "VS Code", Mode: domain.ProjectOpenModeGUI, Command: "code {{path}}",
+	})
+	catalog := newFakeCatalog()
+	project := domain.Project{ID: "p1", Name: "repo", Path: "/repos/repo", Kind: domain.ProjectKindRepository}
+	catalog.byID[project.ID] = project
+	launcher := &fakeLauncher{}
+	tmux := &fakeTmux{}
+	service := newTestService(t, cfg, dependencies(catalog, &fakeRepository{}, launcher, tmux, &fakeStats{}))
+
+	result, err := service.OpenProject(context.Background(), domain.OpenProjectRequest{ProjectID: project.ID, Profile: "vscode"})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+	if result.Mode != domain.ProjectOpenModeGUI || result.Profile != "vscode" || result.Window.ID != "" {
+		t.Fatalf("OpenProject() = %+v", result)
+	}
+	if !reflect.DeepEqual(launcher.openerIDs, []string{"vscode"}) || !reflect.DeepEqual(launcher.openerPaths, []string{project.Path}) {
+		t.Fatalf("GUI launcher calls = ids %v paths %v", launcher.openerIDs, launcher.openerPaths)
+	}
+	if tmux.ensureCalls != 0 || len(tmux.openRequests) != 0 {
+		t.Fatalf("GUI opener used tmux: ensure=%d opens=%d", tmux.ensureCalls, len(tmux.openRequests))
+	}
+
+	_, err = service.OpenProject(context.Background(), domain.OpenProjectRequest{ProjectID: project.ID, Profile: "vscode", NewInstance: true})
+	if !domain.IsCode(err, domain.ErrorCodeInvalidArgument) {
+		t.Fatalf("GUI NewInstance error = %v, want invalid_argument", err)
+	}
+}
+
+func TestOpenProjectSubstitutesPathsInTmuxOpenerCommand(t *testing.T) {
+	cfg := testConfig()
+	cfg.ProjectOpeners[0].Command = "editor {{path}} --root {{oproot}}"
+	catalog := newFakeCatalog()
+	project := domain.Project{ID: "p1", Name: "repo", Path: "/repos/project path"}
+	catalog.byID[project.ID] = project
+	tmux := &fakeTmux{}
+	service := newTestService(t, cfg, dependencies(catalog, &fakeRepository{}, &fakeLauncher{}, tmux, &fakeStats{}))
+
+	if _, err := service.OpenProject(context.Background(), domain.OpenProjectRequest{ProjectID: project.ID}); err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+	if got, want := tmux.openRequests[0].EditorCommand, "editor '/repos/project path' --root /config"; got != want {
+		t.Fatalf("EditorCommand = %q, want %q", got, want)
+	}
+}
+
 func TestRunProjectActionGatesAndDispatchesActions(t *testing.T) {
 	cfg := testConfig()
 	cfg.CustomCommands = []config.CustomCommand{
@@ -664,6 +713,9 @@ func TestTmuxDelegationAndStatsComposition(t *testing.T) {
 	}
 	if err := service.AttachOrSwitch(context.Background()); err != nil || tmux.attachCalls != 1 {
 		t.Fatalf("AttachOrSwitch() error = %v; calls = %d", err, tmux.attachCalls)
+	}
+	if err := service.AttachOrSwitchTo(context.Background(), "@project"); err != nil || tmux.attachWindowID != "@project" {
+		t.Fatalf("AttachOrSwitchTo() error = %v; target = %q", err, tmux.attachWindowID)
 	}
 	snapshot, err := service.GetTmuxSnapshot(context.Background())
 	if err != nil || snapshot.Session.Name != "code" {
@@ -785,6 +837,7 @@ func testConfig() config.Config {
 	cfg.SourcePath = "/config/config.json"
 	cfg.Server.TokenFile = "/config/token"
 	cfg.Tmux.DefaultProfile = "default"
+	cfg.ProjectOpeners[0].ID = "default"
 	return cfg
 }
 
@@ -961,11 +1014,19 @@ func (f *fakeRepository) operationCount() int {
 }
 
 type fakeLauncher struct {
+	openerIDs   []string
+	openerPaths []string
 	nvimPaths   []string
 	codePaths   []string
 	shellPaths  []string
 	customNames []string
 	err         error
+}
+
+func (f *fakeLauncher) LaunchProjectOpener(_ context.Context, id, path string) error {
+	f.openerIDs = append(f.openerIDs, id)
+	f.openerPaths = append(f.openerPaths, path)
+	return f.err
 }
 
 func (f *fakeLauncher) LaunchNvim(_ context.Context, path string) error {
@@ -1003,6 +1064,7 @@ type fakeTmux struct {
 	currentNameErr   error
 	currentNameCalls int
 	attachCalls      int
+	attachWindowID   string
 	attachErr        error
 }
 
@@ -1032,6 +1094,10 @@ func newPlannedAttachTmux(mode tmuxmanager.AttachMode) *plannedAttachTmux {
 }
 
 func (f *plannedAttachTmux) PrepareAttachOrSwitch(context.Context) (tmuxmanager.AttachPlan, error) {
+	return tmuxmanager.AttachPlan{Mode: f.mode}, nil
+}
+
+func (f *plannedAttachTmux) PrepareAttachOrSwitchTo(context.Context, string) (tmuxmanager.AttachPlan, error) {
 	return tmuxmanager.AttachPlan{Mode: f.mode}, nil
 }
 
@@ -1109,6 +1175,10 @@ func (f *serialTmux) PrepareAttachOrSwitch(context.Context) (tmuxmanager.AttachP
 	return tmuxmanager.AttachPlan{Mode: tmuxmanager.AttachModeInteractive}, nil
 }
 
+func (f *serialTmux) PrepareAttachOrSwitchTo(context.Context, string) (tmuxmanager.AttachPlan, error) {
+	return tmuxmanager.AttachPlan{Mode: tmuxmanager.AttachModeInteractive}, nil
+}
+
 func (f *serialTmux) ExecuteAttachOrSwitch(ctx context.Context, _ tmuxmanager.AttachPlan) error {
 	f.entered <- struct{}{}
 	select {
@@ -1132,6 +1202,11 @@ func (f *serialTmux) CurrentProjectName(context.Context) (string, bool, error) {
 }
 
 func (f *fakeTmux) PrepareAttachOrSwitch(context.Context) (tmuxmanager.AttachPlan, error) {
+	return tmuxmanager.AttachPlan{Mode: tmuxmanager.AttachModeInteractive}, nil
+}
+
+func (f *fakeTmux) PrepareAttachOrSwitchTo(_ context.Context, windowID string) (tmuxmanager.AttachPlan, error) {
+	f.attachWindowID = windowID
 	return tmuxmanager.AttachPlan{Mode: tmuxmanager.AttachModeInteractive}, nil
 }
 

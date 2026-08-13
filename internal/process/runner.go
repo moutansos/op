@@ -49,6 +49,7 @@ type Options struct {
 	PreferredShell string
 	GUIEditors     bool
 	OpRoot         string
+	ProjectOpeners []config.ProjectOpener
 	CustomCommands []config.CustomCommand
 }
 
@@ -59,6 +60,7 @@ type Launcher struct {
 	preferredShell Command
 	guiEditors     bool
 	opRoot         string
+	openers        map[string]config.ProjectOpener
 	commands       map[string]config.CustomCommand
 	commandNames   []string
 }
@@ -106,15 +108,50 @@ func NewLauncherWithRunner(options Options, runner CommandRunner) (*Launcher, er
 		commands[command.Name] = command
 		commandNames = append(commandNames, command.Name)
 	}
+	configuredOpeners := options.ProjectOpeners
+	if len(configuredOpeners) == 0 {
+		configuredOpeners = config.Defaults().ProjectOpeners
+	}
+	openers := make(map[string]config.ProjectOpener, len(configuredOpeners))
+	for _, opener := range configuredOpeners {
+		openers[opener.ID] = opener
+	}
 
 	return &Launcher{
 		runner:         runner,
 		preferredShell: Command{Name: shellWords[0], Args: append([]string(nil), shellWords[1:]...)},
 		guiEditors:     options.GUIEditors,
 		opRoot:         options.OpRoot,
+		openers:        openers,
 		commands:       commands,
 		commandNames:   commandNames,
 	}, nil
+}
+
+// LaunchProjectOpener starts a configured GUI project opener.
+func (l *Launcher) LaunchProjectOpener(ctx context.Context, id, path string) error {
+	const op = "process.project_opener"
+	opener, found := l.openers[id]
+	if !found {
+		return domain.ResourceError(domain.ErrorCodeNotFound, op, id, "configured project opener not found", nil)
+	}
+	if opener.Mode != domain.ProjectOpenModeGUI {
+		return domain.FieldError(domain.ErrorCodeInvalidArgument, op, "profile", "must identify a GUI project opener")
+	}
+	if err := validateWorkingDirectory(op, path); err != nil {
+		return err
+	}
+	expanded := Substitute(opener.Command, path, l.opRoot)
+	if opener.RunInPreferredShell {
+		args := append([]string(nil), l.preferredShell.Args...)
+		args = append(args, preferredShellArgs(l.preferredShell.Name, expanded)...)
+		return l.runCommand(ctx, op, Command{Directory: path, Name: l.preferredShell.Name, Args: args})
+	}
+	words, err := splitCommandLine(expanded)
+	if err != nil {
+		return domain.NewError(domain.ErrorCodeInvalidArgument, op, "invalid direct project opener command", err)
+	}
+	return l.runCommand(ctx, op, Command{Directory: path, Name: words[0], Args: words[1:]})
 }
 
 func (l *Launcher) LaunchNvim(ctx context.Context, path string) error {
@@ -168,10 +205,10 @@ func (l *Launcher) RunCustom(ctx context.Context, name, path string) error {
 	expanded := Substitute(command.Command, path, l.opRoot)
 
 	if command.RunInPreferredShell {
-		// Shell interpretation is opt-in for this configured command. The shell
-		// executable and its configured arguments are still launched directly.
+		// Shell interpretation is opt-in, and the shell remains available in the
+		// project directory after the configured command exits.
 		args := append([]string(nil), l.preferredShell.Args...)
-		args = append(args, preferredShellArgs(l.preferredShell.Name, expanded)...)
+		args = append(args, persistentPreferredShellArgs(l.preferredShell, expanded)...)
 		return l.runCommand(ctx, op, Command{
 			Directory: path,
 			Name:      l.preferredShell.Name,

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"slices"
@@ -263,8 +262,8 @@ func TestFilteredRefreshPreservesSelectionThroughReorderAddAndRemove(t *testing.
 		t.Fatal("enter during refilter scheduled an open")
 	}
 	model, actionCmd := updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if actionCmd != nil || model.overlay == actionsOverlay || service.actionCalls != 0 {
-		t.Fatal("action key during refilter targeted the temporary cursor item")
+	if actionCmd != nil || model.overlay == openersOverlay || service.openCalls != 0 {
+		t.Fatal("opener key during refilter targeted the temporary cursor item")
 	}
 
 	model = deliverTestCmd(model, filterCmd)
@@ -285,15 +284,15 @@ func TestFilteredRefreshPreservesSelectionThroughReorderAddAndRemove(t *testing.
 	}
 
 	model.operation = ""
-	model.actions = []Action{{Name: "GUI", ID: "code"}}
-	model.overlay = actionsOverlay
+	model.openers = []ProjectOpener{{Name: "GUI", ID: "code", Mode: domain.ProjectOpenModeGUI}}
+	model.overlay = openersOverlay
 	model, actionCmd = updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyEnter})
 	if actionCmd == nil {
 		t.Fatal("action after refilter did not schedule a command")
 	}
 	actionCmd()
-	if service.actionReq.ProjectID != "two" {
-		t.Fatalf("action project ID = %q, want two", service.actionReq.ProjectID)
+	if service.openReq.ProjectID != "two" {
+		t.Fatalf("opener project ID = %q, want two", service.openReq.ProjectID)
 	}
 }
 
@@ -320,8 +319,8 @@ func TestFilteredRefreshRemovedSelectionStaysUnselected(t *testing.T) {
 		t.Fatal("enter targeted another project after the selected project was removed")
 	}
 	model, cmd = updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if cmd != nil || model.overlay == actionsOverlay || service.actionCalls != 0 {
-		t.Fatal("action picker opened for another project after the selected project was removed")
+	if cmd != nil || model.overlay == openersOverlay || service.openCalls != 0 {
+		t.Fatal("opener picker opened for another project after the selected project was removed")
 	}
 }
 
@@ -332,7 +331,7 @@ func TestFilteredRefreshCompletesWhileProjectsAreHidden(t *testing.T) {
 		overlay overlay
 	}{
 		{name: "unfocused section", section: statsSection, overlay: noOverlay},
-		{name: "actions overlay", section: projectsSection, overlay: actionsOverlay},
+		{name: "openers overlay", section: projectsSection, overlay: openersOverlay},
 		{name: "create overlay", section: projectsSection, overlay: createOverlay},
 		{name: "clone overlay", section: projectsSection, overlay: cloneOverlay},
 		{name: "worktree overlay", section: projectsSection, overlay: worktreeOverlay},
@@ -594,7 +593,7 @@ func TestRefreshCommandsHaveTimeoutAndQuitDoesNotCallService(t *testing.T) {
 	}
 }
 
-func TestCreateCloneAndActionFormsScheduleCommands(t *testing.T) {
+func TestCreateCloneAndOpenerFormsScheduleCommands(t *testing.T) {
 	service := &fakeService{}
 	model := loadProjectsForTest(testModel(service), domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"})
 
@@ -632,207 +631,38 @@ func TestCreateCloneAndActionFormsScheduleCommands(t *testing.T) {
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	model = updated.(Model)
 	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if service.actionCalls != 0 || cmd == nil {
-		t.Fatal("action picker did not defer service I/O to an Exec command")
+	if service.openCalls != 0 || cmd == nil {
+		t.Fatal("opener picker did not defer service I/O to a command")
 	}
 	cmd()
-	if service.actionCalls != 0 {
-		t.Fatal("constructing the Exec message ran the interactive service action")
+	if service.openCalls != 1 || service.openReq.Profile != "default-profile" {
+		t.Fatalf("opener request = %#v", service.openReq)
 	}
 }
 
-func TestActionCommandSelectionAndTerminalHandoffAdapter(t *testing.T) {
-	service := &fakeService{}
-	model := loadProjectsForTest(testModel(service), domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"})
-	model.options.Actions = []Action{{Name: "Custom", ID: "custom"}}
-	model.actions = []Action{
-		{Name: "Neovim", ID: "nvim"},
-		{Name: "Shell", ID: "shell"},
-		{Name: "Custom", ID: "custom"},
-		{Name: "VS Code", ID: "code"},
-	}
-
-	for index, action := range []string{"nvim", "shell", "custom"} {
-		if !model.actionUsesTerminal(action) {
-			t.Fatalf("actionUsesTerminal(%q) = false", action)
-		}
-		model.overlay = actionsOverlay
-		model.actionIndex = index
-		updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-		model = updated.(Model)
-		if cmd == nil {
-			t.Fatalf("action %q returned no command", action)
-		}
-		cmd()
-		if service.actionCalls != 0 {
-			t.Fatalf("action %q used a normal tea.Cmd instead of tea.Exec", action)
-		}
-		model.operation = ""
-	}
-	if model.actionUsesTerminal("code") || model.actionUsesTerminal("worktree") {
-		t.Fatal("non-terminal action selected Exec")
-	}
-	model.overlay = actionsOverlay
-	model.actionIndex = 3
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(Model)
-	if _, ok := cmd().(actionFinishedMsg); !ok || service.actionCalls != 1 || service.actionReq.Action != "code" {
-		t.Fatalf("GUI action did not use asynchronous command: calls=%d request=%#v", service.actionCalls, service.actionReq)
-	}
-	model.operation = ""
-	service.actionCalls = 0
-
-	command := &serviceExecCommand{
-		ctx: context.Background(), service: service,
-		request: domain.RunProjectActionRequest{ProjectID: "p1", Action: "shell"},
-	}
-	stdin := bytes.NewBufferString("input")
-	stdout := &bytes.Buffer{}
-	stderr := &bytes.Buffer{}
-	command.SetStdin(stdin)
-	command.SetStdout(stdout)
-	command.SetStderr(stderr)
-	if command.stdin != stdin || command.stdout != stdout || command.stderr != stderr {
-		t.Fatal("Exec adapter did not accept Bubble Tea terminal streams")
-	}
-	if err := command.Run(); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	message, ok := command.message(nil).(actionFinishedMsg)
-	if !ok || message.result.Action != "shell" || service.actionCalls != 1 {
-		t.Fatalf("Exec completion = %#v, calls = %d", message, service.actionCalls)
-	}
-	model.operation = "action"
-	model = updateTestModel(model, message)
-	if model.operation != "" || model.statusErr || !strings.Contains(model.status, "Started shell") {
-		t.Fatalf("terminal action success state: operation=%q status=%q", model.operation, model.status)
-	}
-}
-
-func TestConfiguredActionsExcludeReservedIDsAndDispatchAcceptedCustomID(t *testing.T) {
+func TestConfiguredProjectOpenerSelection(t *testing.T) {
 	service := &fakeService{}
 	model := NewModel(context.Background(), service, Options{
-		GUIEditors: true,
-		Actions: []Action{
-			{Name: "Open shell logs", ID: "Open shell logs"},
-			{Name: "Case-distinct Nvim", ID: "Nvim"},
-			{Name: "Override Neovim", ID: "nvim"},
-			{Name: "Override Code", ID: "code"},
-			{Name: "Override Shell", ID: "shell"},
-			{Name: "Override Worktree", ID: "worktree"},
-			{Name: "Worktree branch syntax", ID: "worktree:feature"},
-		},
-	})
-
-	counts := make(map[string]int)
-	accepted := make(map[string]bool)
-	for _, configured := range model.actions {
-		counts[configured.ID]++
-		accepted[configured.Name] = true
-	}
-	for _, id := range []string{"nvim", "code", "shell", "worktree"} {
-		if counts[id] != 1 {
-			t.Fatalf("built-in action %q appears %d times, want once: %#v", id, counts[id], model.actions)
-		}
-	}
-	for _, rejected := range []string{"Override Neovim", "Override Code", "Override Shell", "Override Worktree", "Worktree branch syntax"} {
-		if accepted[rejected] {
-			t.Fatalf("reserved configured action %q appeared in picker: %#v", rejected, model.actions)
-		}
-	}
-	for _, name := range []string{"Open shell logs", "Case-distinct Nvim"} {
-		if !accepted[name] {
-			t.Fatalf("accepted configured action %q missing from picker: %#v", name, model.actions)
-		}
-	}
-
-	command := &serviceExecCommand{
-		ctx: context.Background(), service: service,
-		request: domain.RunProjectActionRequest{ProjectID: "p1", Action: "Open shell logs"},
-	}
-	if err := command.Run(); err != nil {
-		t.Fatalf("custom action Run() error = %v", err)
-	}
-	if service.actionCalls != 1 || service.actionReq.Action != "Open shell logs" {
-		t.Fatalf("custom action dispatch calls=%d request=%#v", service.actionCalls, service.actionReq)
-	}
-}
-
-func TestBypassReservedActionMetadataDoesNotChangeBuiltInHandling(t *testing.T) {
-	service := &fakeService{}
-	model := NewModel(context.Background(), service, Options{
-		GUIEditors: true,
-		Actions: []Action{
-			{Name: "Code as terminal", ID: "code"},
-			{Name: "Worktree as terminal", ID: "worktree"},
+		DefaultProfile: "nvim",
+		ProjectOpeners: []ProjectOpener{
+			{ID: "nvim", Name: "Neovim in tmux", Mode: domain.ProjectOpenModeTmux},
+			{ID: "vscode", Name: "VS Code", Mode: domain.ProjectOpenModeGUI},
 		},
 	})
 	model = loadProjectsForTest(model, domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"})
-
-	if !model.actionUsesTerminal("nvim") || !model.actionUsesTerminal("shell") {
-		t.Fatal("terminal built-ins were not classified by the authoritative action policy")
-	}
-	if model.actionUsesTerminal("code") || model.actionUsesTerminal("worktree") {
-		t.Fatal("reserved Options.Action metadata changed non-terminal built-in classification")
-	}
-
-	indexOf := func(id string) int {
-		for index, candidate := range model.actions {
-			if candidate.ID == id {
-				return index
-			}
-		}
-		return -1
-	}
-	codeIndex := indexOf("code")
-	worktreeIndex := indexOf("worktree")
-	if codeIndex < 0 || worktreeIndex < 0 {
-		t.Fatalf("built-in actions missing from picker: %#v", model.actions)
-	}
-
-	model.overlay = actionsOverlay
-	model.actionIndex = codeIndex
+	model.overlay = openersOverlay
+	model.openerIndex = 1
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(Model)
-	if cmd == nil {
-		t.Fatal("code action returned no command")
-	}
-	if _, ok := cmd().(actionFinishedMsg); !ok || service.actionCalls != 1 || service.actionReq.Action != "code" {
-		t.Fatalf("code action did not retain asynchronous built-in handling: calls=%d request=%#v", service.actionCalls, service.actionReq)
-	}
-
-	model.operation = ""
-	model.overlay = actionsOverlay
-	model.actionIndex = worktreeIndex
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(Model)
-	if model.overlay != worktreeOverlay || service.actionCalls != 1 {
-		t.Fatalf("worktree action did not retain form handling: overlay=%d calls=%d", model.overlay, service.actionCalls)
-	}
-}
-
-func TestTerminalActionErrorUpdatesModel(t *testing.T) {
-	service := &fakeService{actionErr: errors.New("editor exited")}
-	model := testModel(service)
-	command := &serviceExecCommand{
-		ctx: context.Background(), service: service,
-		request: domain.RunProjectActionRequest{ProjectID: "p1", Action: "nvim"},
-	}
-	err := command.Run()
-	model.operation = "action"
-	model = updateTestModel(model, command.message(err))
-	if model.operation != "" || !model.statusErr || !strings.Contains(model.status, "editor exited") {
-		t.Fatalf("terminal action error state: operation=%q status=%q", model.operation, model.status)
+	if _, ok := cmd().(openFinishedMsg); !ok || service.openCalls != 1 || service.openReq.Profile != "vscode" {
+		t.Fatalf("GUI opener was not dispatched: calls=%d request=%#v", service.openCalls, service.openReq)
 	}
 }
 
 func TestWorktreeFormSchedulesCreateWorktree(t *testing.T) {
 	service := &fakeService{}
 	model := loadProjectsForTest(testModel(service), domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"})
-	model.actionIndex = 2
-	model.overlay = actionsOverlay
-
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 	model = updated.(Model)
 	if cmd == nil || model.overlay != worktreeOverlay || len(model.inputs) != 2 {
 		t.Fatalf("worktree action did not open form: overlay=%d inputs=%d", model.overlay, len(model.inputs))

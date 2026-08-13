@@ -22,6 +22,20 @@
   "actions": {
     "guiEditors": false
   },
+  "projectOpeners": [
+    {
+      "id": "nvim",
+      "name": "Neovim in tmux",
+      "mode": "tmux",
+      "command": "nvim ."
+    },
+    {
+      "id": "vscode",
+      "name": "VS Code",
+      "mode": "gui",
+      "command": "code {{path}}"
+    }
+  ],
   "customEntries": [
     {
       "name": "nvim-config",

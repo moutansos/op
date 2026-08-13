@@ -40,6 +40,9 @@ func Validate(config Config) error {
 	if strings.TrimSpace(config.Tmux.DefaultProfile) == "" {
 		return invalid("tmux.defaultProfile", "must not be empty")
 	}
+	if err := validateProjectOpeners(config.ProjectOpeners, config.Tmux.DefaultProfile); err != nil {
+		return err
+	}
 	if config.Stats.RefreshInterval.Duration <= 0 {
 		return invalid("stats.refreshInterval", "must be greater than zero")
 	}
@@ -54,6 +57,47 @@ func Validate(config Config) error {
 	}
 	if err := validateCommands(config.CustomCommands); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateProjectOpeners(openers []ProjectOpener, defaultProfile string) error {
+	if len(openers) == 0 {
+		return invalid("projectOpeners", "must contain at least one opener")
+	}
+	ids := make(map[string]bool, len(openers))
+	defaultFound := false
+	for i, opener := range openers {
+		prefix := fmt.Sprintf("projectOpeners[%d]", i)
+		if opener.ID == "" || opener.ID != strings.TrimSpace(opener.ID) {
+			return invalid(prefix+".id", "must not be empty or have surrounding whitespace")
+		}
+		if containsControl(opener.ID) || strings.Contains(opener.ID, "-:-") {
+			return invalid(prefix+".id", "must not contain control characters or gotmux's '-:-' separator")
+		}
+		if ids[opener.ID] {
+			return invalid(prefix+".id", "must be unique")
+		}
+		ids[opener.ID] = true
+		defaultFound = defaultFound || opener.ID == defaultProfile
+		if strings.TrimSpace(opener.Name) == "" {
+			return invalid(prefix+".name", "must not be empty")
+		}
+		if containsControl(opener.Name) {
+			return invalid(prefix+".name", "must not contain control characters")
+		}
+		if opener.Mode != domain.ProjectOpenModeTmux && opener.Mode != domain.ProjectOpenModeGUI {
+			return invalid(prefix+".mode", "must be tmux or gui")
+		}
+		if strings.TrimSpace(opener.Command) == "" {
+			return invalid(prefix+".command", "must not be empty")
+		}
+		if strings.ContainsRune(opener.Command, '\x00') || containsControl(opener.Command) {
+			return invalid(prefix+".command", "must not contain control characters")
+		}
+	}
+	if !defaultFound {
+		return invalid("tmux.defaultProfile", "must match a configured project opener ID")
 	}
 	return nil
 }

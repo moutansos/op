@@ -49,6 +49,10 @@ func (*lazyTestTmux) PrepareAttachOrSwitch(context.Context) (tmuxmanager.AttachP
 	return tmuxmanager.AttachPlan{Mode: tmuxmanager.AttachModeInteractive}, nil
 }
 
+func (*lazyTestTmux) PrepareAttachOrSwitchTo(context.Context, string) (tmuxmanager.AttachPlan, error) {
+	return tmuxmanager.AttachPlan{Mode: tmuxmanager.AttachModeInteractive}, nil
+}
+
 func (*lazyTestTmux) ExecuteAttachOrSwitch(context.Context, tmuxmanager.AttachPlan) error { return nil }
 
 func (*lazyTestTmux) OpenProjectWindow(context.Context, tmuxmanager.OpenProjectWindowRequest) (domain.OpenProjectResult, error) {

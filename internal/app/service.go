@@ -24,7 +24,6 @@ import (
 
 const (
 	defaultDashboardCommand = "op dashboard"
-	defaultEditorCommand    = "nvim ."
 )
 
 // Catalog is the project discovery and safe-path boundary used by Service.
@@ -50,6 +49,7 @@ type Repository interface {
 
 // Launcher is the local process boundary used by Service.
 type Launcher interface {
+	LaunchProjectOpener(context.Context, string, string) error
 	LaunchNvim(context.Context, string) error
 	LaunchCode(context.Context, string) error
 	LaunchPreferredShell(context.Context, string) error
@@ -60,6 +60,7 @@ type Launcher interface {
 type TmuxManager interface {
 	EnsureMainSession(context.Context) (domain.EnsureMainSessionResult, error)
 	PrepareAttachOrSwitch(context.Context) (tmuxmanager.AttachPlan, error)
+	PrepareAttachOrSwitchTo(context.Context, string) (tmuxmanager.AttachPlan, error)
 	ExecuteAttachOrSwitch(context.Context, tmuxmanager.AttachPlan) error
 	OpenProjectWindow(context.Context, tmuxmanager.OpenProjectWindowRequest) (domain.OpenProjectResult, error)
 	Snapshot(context.Context) (domain.TmuxSnapshot, error)
@@ -86,7 +87,6 @@ type Dependencies struct {
 type Options struct {
 	EnableRepositoryUpdates bool
 	DashboardCommand        string
-	EditorCommand           string
 	OperationLockDirectory  string
 	Output                  io.Writer
 	Error                   io.Writer
@@ -103,7 +103,7 @@ type Service struct {
 	locks          *keyedLocks
 	tmuxLockKey    string
 	updateRepos    bool
-	editorCommand  string
+	projectOpeners map[string]config.ProjectOpener
 	customCommands map[string]struct{}
 }
 
@@ -123,6 +123,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Service, err
 		PreferredShell: cfg.PreferredShell,
 		GUIEditors:     cfg.Actions.GUIEditors,
 		OpRoot:         cfg.RootDirectory,
+		ProjectOpeners: cfg.ProjectOpeners,
 		CustomCommands: cfg.CustomCommands,
 	})
 	if err != nil {
@@ -136,17 +137,14 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Service, err
 	if dashboardCommand == "" {
 		dashboardCommand = defaultDashboardCommand
 	}
-	editorCommand := options.EditorCommand
-	if editorCommand == "" {
-		editorCommand = defaultEditorCommand
-	}
+	defaultOpener, _ := projectOpener(cfg, cfg.Tmux.DefaultProfile)
 	tmuxConfig := tmuxmanager.ManagerConfig{
 		Session:          cfg.Tmux.Session,
 		DashboardWindow:  cfg.Tmux.DashboardWindow,
 		Socket:           cfg.Tmux.Socket,
 		StartDirectory:   startDirectory,
 		DashboardCommand: dashboardCommand,
-		EditorCommand:    editorCommand,
+		EditorCommand:    defaultOpener.Command,
 		PreferredShell:   cfg.PreferredShell,
 		ShellPaneRows:    cfg.Tmux.ShellPaneRows,
 		DefaultProfile:   cfg.Tmux.DefaultProfile,
@@ -186,13 +184,13 @@ func NewWithDependencies(cfg config.Config, dependencies Dependencies, options O
 			return nil, domain.FieldError(domain.ErrorCodeInvalidArgument, op, name, "must not be nil")
 		}
 	}
-	editorCommand := options.EditorCommand
-	if editorCommand == "" {
-		editorCommand = defaultEditorCommand
-	}
 	commands := make(map[string]struct{}, len(cfg.CustomCommands))
 	for _, command := range cfg.CustomCommands {
 		commands[command.Name] = struct{}{}
+	}
+	openers := make(map[string]config.ProjectOpener, len(cfg.ProjectOpeners))
+	for _, opener := range cfg.ProjectOpeners {
+		openers[opener.ID] = opener
 	}
 	lockDirectory, err := operationLockDirectory(options.OperationLockDirectory)
 	if err != nil {
@@ -202,7 +200,7 @@ func NewWithDependencies(cfg config.Config, dependencies Dependencies, options O
 		config: cfg, catalog: dependencies.Catalog, repository: dependencies.Repository,
 		launcher: dependencies.Launcher, tmux: dependencies.Tmux, stats: dependencies.Stats,
 		locks: newKeyedLocks(lockDirectory), tmuxLockKey: tmuxSessionLockKey(cfg), updateRepos: options.EnableRepositoryUpdates,
-		editorCommand: editorCommand, customCommands: commands,
+		projectOpeners: openers, customCommands: commands,
 	}, nil
 }
 
@@ -259,7 +257,7 @@ func (s *Service) CreateProject(ctx context.Context, request domain.CreateProjec
 	}
 	result := domain.CreateProjectResult{Project: created}
 	if request.OpenOnFinish {
-		opened, err := s.openResolved(ctx, created, request.Profile, false, false)
+		opened, err := s.openResolved(ctx, created, request.Profile, false, false, false)
 		if err != nil {
 			return domain.CreateProjectResult{}, err
 		}
@@ -305,7 +303,7 @@ func (s *Service) CloneProject(ctx context.Context, request domain.CloneRequest)
 	}
 	result := domain.CloneResult{Project: created}
 	if request.OpenOnFinish {
-		opened, err := s.openResolved(ctx, created, request.Profile, false, false)
+		opened, err := s.openResolved(ctx, created, request.Profile, false, false, false)
 		if err != nil {
 			return domain.CloneResult{}, err
 		}
@@ -371,7 +369,7 @@ func (s *Service) CreateWorktree(ctx context.Context, request domain.CreateWorkt
 	created.Kind = domain.ProjectKindWorktree
 	result := domain.CreateWorktreeResult{Project: created}
 	if request.OpenOnFinish {
-		opened, err := s.openResolved(ctx, created, request.Profile, false, false)
+		opened, err := s.openResolved(ctx, created, request.Profile, false, false, false)
 		if err != nil {
 			return domain.CreateWorktreeResult{}, err
 		}
@@ -390,13 +388,20 @@ func (s *Service) OpenProject(ctx context.Context, request domain.OpenProjectReq
 	if err != nil {
 		return domain.OpenProjectResult{}, err
 	}
-	return s.openResolved(ctx, project, request.Profile, request.NewInstance, true)
+	return s.openResolved(ctx, project, request.Profile, request.NewInstance, request.DeferSelection, true)
 }
 
-func (s *Service) openResolved(ctx context.Context, project domain.Project, profile string, newInstance, allowPull bool) (domain.OpenProjectResult, error) {
+func (s *Service) openResolved(ctx context.Context, project domain.Project, profile string, newInstance, deferSelection, allowPull bool) (domain.OpenProjectResult, error) {
 	const op = "app.open_project"
 	if err := s.validateProfile(op, profile); err != nil {
 		return domain.OpenProjectResult{}, err
+	}
+	if profile == "" {
+		profile = s.config.Tmux.DefaultProfile
+	}
+	opener := s.projectOpeners[profile]
+	if opener.Mode == domain.ProjectOpenModeGUI && newInstance {
+		return domain.OpenProjectResult{}, domain.FieldError(domain.ErrorCodeInvalidArgument, op, "newInstance", "is only supported by tmux project openers")
 	}
 	release, err := s.locks.acquire(ctx, "project:"+project.ID)
 	if err != nil {
@@ -415,9 +420,13 @@ func (s *Service) openResolved(ctx context.Context, project domain.Project, prof
 			}
 		}
 	}
-	if profile == "" {
-		profile = s.config.Tmux.DefaultProfile
+	if opener.Mode == domain.ProjectOpenModeGUI {
+		if err := s.launcher.LaunchProjectOpener(ctx, profile, project.Path); err != nil {
+			return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeInternal, "launch GUI project opener", err)
+		}
+		return domain.OpenProjectResult{Project: project, Profile: profile, Mode: opener.Mode}, nil
 	}
+	editorCommand := process.Substitute(opener.Command, project.Path, s.config.RootDirectory)
 	// Keep the session lock innermost so every path/project operation uses the
 	// same lock order, and hold it through rollback inside OpenProjectWindow.
 	releaseTmux, err := s.acquireTmuxMutation(ctx, op)
@@ -429,12 +438,14 @@ func (s *Service) openResolved(ctx context.Context, project domain.Project, prof
 		return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeDependency, "ensure tmux session", err)
 	}
 	result, err := s.tmux.OpenProjectWindow(ctx, tmuxmanager.OpenProjectWindowRequest{
-		Project: project, Profile: profile, EditorCommand: s.editorCommand,
-		ShellCommand: s.config.PreferredShell, NewInstance: newInstance,
+		Project: project, Profile: profile, EditorCommand: editorCommand,
+		ShellCommand: s.config.PreferredShell, NewInstance: newInstance, DeferSelection: deferSelection,
 	})
 	if err != nil {
 		return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeDependency, "open tmux project window", err)
 	}
+	result.Profile = profile
+	result.Mode = opener.Mode
 	return result, nil
 }
 
@@ -497,6 +508,12 @@ func (s *Service) EnsureMainSession(ctx context.Context) (domain.EnsureMainSessi
 // AttachOrSwitch attaches outside tmux and switches the current client inside
 // tmux. The tmux manager owns the environment-sensitive behavior.
 func (s *Service) AttachOrSwitch(ctx context.Context) error {
+	return s.AttachOrSwitchTo(ctx, "")
+}
+
+// AttachOrSwitchTo attaches or switches the invoking client to a window in the
+// managed session. An empty window ID targets the dashboard.
+func (s *Service) AttachOrSwitchTo(ctx context.Context, windowID string) error {
 	release, err := s.acquireTmuxMutation(ctx, "app.attach_or_switch")
 	if err != nil {
 		return err
@@ -507,7 +524,7 @@ func (s *Service) AttachOrSwitch(ctx context.Context) error {
 			release()
 		}
 	}()
-	plan, err := s.tmux.PrepareAttachOrSwitch(ctx)
+	plan, err := s.tmux.PrepareAttachOrSwitchTo(ctx, windowID)
 	if err != nil {
 		return typed(ctx, "app.attach_or_switch", domain.ErrorCodeDependency, "prepare tmux attach or switch", err)
 	}
@@ -619,10 +636,22 @@ func (s *Service) resolveProject(ctx context.Context, op, id string) (domain.Pro
 }
 
 func (s *Service) validateProfile(op, profile string) error {
-	if profile != "" && profile != s.config.Tmux.DefaultProfile {
-		return domain.FieldError(domain.ErrorCodeInvalidArgument, op, "profile", "must be empty or match the configured default profile")
+	if profile == "" {
+		return nil
+	}
+	if _, found := s.projectOpeners[profile]; !found {
+		return domain.FieldError(domain.ErrorCodeInvalidArgument, op, "profile", "must match a configured project opener ID")
 	}
 	return nil
+}
+
+func projectOpener(cfg config.Config, id string) (config.ProjectOpener, bool) {
+	for _, opener := range cfg.ProjectOpeners {
+		if opener.ID == id {
+			return opener, true
+		}
+	}
+	return config.ProjectOpener{}, false
 }
 
 func requireMissingDestination(op, path string) error {
@@ -764,6 +793,14 @@ func (l *lazyTmux) PrepareAttachOrSwitch(ctx context.Context) (tmuxmanager.Attac
 		return tmuxmanager.AttachPlan{}, err
 	}
 	return manager.PrepareAttachOrSwitch(ctx)
+}
+
+func (l *lazyTmux) PrepareAttachOrSwitchTo(ctx context.Context, windowID string) (tmuxmanager.AttachPlan, error) {
+	manager, err := l.get(ctx)
+	if err != nil {
+		return tmuxmanager.AttachPlan{}, err
+	}
+	return manager.PrepareAttachOrSwitchTo(ctx, windowID)
 }
 
 func (l *lazyTmux) ExecuteAttachOrSwitch(ctx context.Context, plan tmuxmanager.AttachPlan) error {

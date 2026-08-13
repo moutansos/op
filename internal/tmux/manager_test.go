@@ -732,6 +732,28 @@ func TestOpenProjectWindowRecreatesDeadOwnedTaggedWindow(t *testing.T) {
 	}
 }
 
+func TestOpenProjectWindowReusesOnlyMatchingProfile(t *testing.T) {
+	fake := managedFake()
+	manager := testManager(fake)
+	project := domain.Project{ID: "project", Name: "project", Path: "/repos/project"}
+
+	first, err := manager.OpenProjectWindow(context.Background(), OpenProjectWindowRequest{Project: project, Profile: "nvim"})
+	if err != nil {
+		t.Fatalf("first OpenProjectWindow() error = %v", err)
+	}
+	second, err := manager.OpenProjectWindow(context.Background(), OpenProjectWindowRequest{Project: project, Profile: "opencode", EditorCommand: "opencode ."})
+	if err != nil {
+		t.Fatalf("second OpenProjectWindow() error = %v", err)
+	}
+	if second.Reused || second.Window.ID == first.Window.ID {
+		t.Fatalf("different profile reused first window: first=%+v second=%+v", first, second)
+	}
+	reused, err := manager.OpenProjectWindow(context.Background(), OpenProjectWindowRequest{Project: project, Profile: "opencode", EditorCommand: "opencode ."})
+	if err != nil || !reused.Reused || reused.Window.ID != second.Window.ID {
+		t.Fatalf("matching profile reuse = %+v, err = %v", reused, err)
+	}
+}
+
 func TestOpenProjectWindowUsesCollisionSafeName(t *testing.T) {
 	fake := managedFake()
 	other := fake.addWindow("other", 1, "same-name")
@@ -992,6 +1014,23 @@ func TestAttachOrSwitchUsesExplicitWritersAndVerifiesSwitch(t *testing.T) {
 	}
 	if fake.paneSessions[invokingPane] != "external" {
 		t.Fatalf("invoking pane moved to %q", fake.paneSessions[invokingPane])
+	}
+}
+
+func TestAttachOrSwitchCanTargetProjectWindow(t *testing.T) {
+	fake := managedFake()
+	project := fake.addWindow("project", 1, "project")
+	manager := testManager(fake)
+	manager.lookupEnv = func(string) string { return "" }
+	plan, err := manager.PrepareAttachOrSwitchTo(context.Background(), project.ID)
+	if err != nil {
+		t.Fatalf("PrepareAttachOrSwitchTo() error = %v", err)
+	}
+	if err := manager.ExecuteAttachOrSwitch(context.Background(), plan); err != nil {
+		t.Fatalf("ExecuteAttachOrSwitch() error = %v", err)
+	}
+	if fake.attachWindow != project.ID {
+		t.Fatalf("attach window = %q, want %q", fake.attachWindow, project.ID)
 	}
 }
 

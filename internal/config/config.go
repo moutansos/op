@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/moutansos/op/internal/domain"
 )
 
 const FileName = "config.json"
@@ -15,6 +17,7 @@ type Config struct {
 	Stats          StatsConfig     `json:"stats"`
 	Server         ServerConfig    `json:"server"`
 	Actions        ActionsConfig   `json:"actions"`
+	ProjectOpeners []ProjectOpener `json:"projectOpeners"`
 	CustomEntries  []CustomEntry   `json:"customEntries"`
 	CustomCommands []CustomCommand `json:"customCommands"`
 
@@ -45,6 +48,16 @@ type ServerConfig struct {
 
 type ActionsConfig struct {
 	GUIEditors bool `json:"guiEditors"`
+}
+
+// ProjectOpener configures one way to open a project selected from the
+// dashboard. GUI commands run directly unless RunInPreferredShell is enabled.
+type ProjectOpener struct {
+	ID                  string                 `json:"id"`
+	Name                string                 `json:"name"`
+	Mode                domain.ProjectOpenMode `json:"mode"`
+	Command             string                 `json:"command"`
+	RunInPreferredShell bool                   `json:"runInPreferredShell,omitempty"`
 }
 
 type CustomEntry struct {
@@ -103,6 +116,7 @@ func Defaults() Config {
 			TokenFile: "~/.config/op/server-token",
 		},
 		Actions:        ActionsConfig{GUIEditors: false},
+		ProjectOpeners: []ProjectOpener{{ID: "nvim", Name: "Neovim in tmux", Mode: domain.ProjectOpenModeTmux, Command: "nvim ."}},
 		CustomEntries:  make([]CustomEntry, 0),
 		CustomCommands: make([]CustomCommand, 0),
 	}

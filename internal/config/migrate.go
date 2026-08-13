@@ -15,6 +15,7 @@ type rawConfig struct {
 	Stats          *rawStatsConfig   `json:"stats"`
 	Server         *rawServerConfig  `json:"server"`
 	Actions        *rawActionsConfig `json:"actions"`
+	ProjectOpeners *[]ProjectOpener  `json:"projectOpeners"`
 	CustomEntries  *[]CustomEntry    `json:"customEntries"`
 	CustomCommands *[]CustomCommand  `json:"customCommands"`
 
@@ -92,6 +93,16 @@ func Migrate(data []byte) (Config, []Warning, error) {
 	applyStats(&config.Stats, raw.Stats)
 	applyServer(&config.Server, raw.Server)
 	applyActions(&config.Actions, raw.Actions)
+	if raw.ProjectOpeners != nil {
+		config.ProjectOpeners = *raw.ProjectOpeners
+		if config.ProjectOpeners == nil {
+			config.ProjectOpeners = make([]ProjectOpener, 0)
+		}
+	} else if config.Tmux.DefaultProfile != "nvim" {
+		// Before projectOpeners existed, defaultProfile was only a label for the
+		// fixed Neovim layout. Preserve that configured label during migration.
+		config.ProjectOpeners[0].ID = config.Tmux.DefaultProfile
+	}
 	if raw.IsServer != nil {
 		if raw.Actions == nil || raw.Actions.GUIEditors == nil {
 			config.Actions.GUIEditors = !*raw.IsServer
@@ -186,11 +197,12 @@ func applyActions(target *ActionsConfig, raw *rawActionsConfig) {
 
 func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	var warnings []Warning
-	collectUnknown(root, "", set("repoDirectory", "preferredShell", "tmux", "stats", "server", "actions", "customEntries", "customCommands", "preferedShell", "wslRepoDirectory", "isServer"), &warnings)
+	collectUnknown(root, "", set("repoDirectory", "preferredShell", "tmux", "stats", "server", "actions", "projectOpeners", "customEntries", "customCommands", "preferedShell", "wslRepoDirectory", "isServer"), &warnings)
 	collectObjectUnknown(root["tmux"], "tmux", set("session", "dashboardWindow", "socket", "shellPaneRows", "defaultProfile"), &warnings)
 	collectObjectUnknown(root["stats"], "stats", set("refreshInterval", "tmuxRefreshInterval"), &warnings)
 	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "tokenFile", "tlsCertFile", "tlsKeyFile"), &warnings)
 	collectObjectUnknown(root["actions"], "actions", set("guiEditors"), &warnings)
+	collectArrayUnknown(root["projectOpeners"], "projectOpeners", set("id", "name", "mode", "command", "runInPreferredShell"), "", nil, &warnings)
 	collectArrayUnknown(root["customEntries"], "customEntries", set("name", "paths"), "paths", set("win", "linux"), &warnings)
 	collectArrayUnknown(root["customCommands"], "customCommands", set("name", "command", "runInPreferredShell", "global"), "", nil, &warnings)
 	return warnings

@@ -45,11 +45,12 @@ type ManagerConfig struct {
 // OpenProjectWindowRequest contains a resolved project. Callers must resolve a
 // stable project ID through the catalog before invoking the manager.
 type OpenProjectWindowRequest struct {
-	Project       domain.Project
-	Profile       string
-	EditorCommand string
-	ShellCommand  string
-	NewInstance   bool
+	Project        domain.Project
+	Profile        string
+	EditorCommand  string
+	ShellCommand   string
+	NewInstance    bool
+	DeferSelection bool
 }
 
 type Manager struct {
@@ -463,17 +464,24 @@ func (m *Manager) OpenProjectWindow(ctx context.Context, request OpenProjectWind
 	if !request.NewInstance {
 		var unhealthyOwned []string
 		for _, window := range windows {
-			if window.ProjectID == request.Project.ID {
+			if window.ProjectID == request.Project.ID && (window.Profile == profile || window.Profile == "" && profile == m.config.DefaultProfile) {
 				healthy, healthErr := m.projectWindowHealthy(ctx, window.ID)
 				if healthErr != nil {
 					return result, healthErr
 				}
 				if healthy {
+					if request.DeferSelection {
+						window, mapErr := m.snapshotWindow(ctx, window.ID)
+						if mapErr != nil {
+							return result, mapErr
+						}
+						return domain.OpenProjectResult{Project: request.Project, Profile: profile, Mode: domain.ProjectOpenModeTmux, Window: window, Reused: true}, nil
+					}
 					selected, selectErr := m.selectWindow(ctx, window.ID)
 					if selectErr != nil {
 						return result, selectErr
 					}
-					return domain.OpenProjectResult{Project: request.Project, Window: selected, Reused: true}, nil
+					return domain.OpenProjectResult{Project: request.Project, Profile: profile, Mode: domain.ProjectOpenModeTmux, Window: selected, Reused: true}, nil
 				}
 				if window.Owner == "1" {
 					unhealthyOwned = append(unhealthyOwned, window.ID)
@@ -575,12 +583,32 @@ func (m *Manager) OpenProjectWindow(ctx context.Context, request OpenProjectWind
 			return result, err
 		}
 	}
-	selected, err := m.selectWindow(ctx, createdID)
+	var selected domain.TmuxWindow
+	if request.DeferSelection {
+		selected, err = m.snapshotWindow(ctx, createdID)
+	} else {
+		selected, err = m.selectWindow(ctx, createdID)
+	}
 	if err != nil {
 		return result, err
 	}
 	rollback = false
-	return domain.OpenProjectResult{Project: request.Project, Window: selected, Reused: false}, nil
+	return domain.OpenProjectResult{Project: request.Project, Profile: profile, Mode: domain.ProjectOpenModeTmux, Window: selected, Reused: false}, nil
+}
+
+func (m *Manager) snapshotWindow(ctx context.Context, windowID string) (domain.TmuxWindow, error) {
+	snapshot, err := m.Snapshot(ctx)
+	if err != nil {
+		return domain.TmuxWindow{}, err
+	}
+	if snapshot.Session != nil {
+		for _, window := range snapshot.Session.Windows {
+			if window.ID == windowID {
+				return window, nil
+			}
+		}
+	}
+	return domain.TmuxWindow{}, m.verification("tmux.open_project_window", "project window disappeared", nil)
 }
 
 func validateProjectRequest(request OpenProjectWindowRequest) error {
@@ -711,10 +739,10 @@ const (
 // AttachPlan captures targets while the application session lock is held.
 // Interactive execution can release that lock before blocking in tmux.
 type AttachPlan struct {
-	Mode        AttachMode
-	sessionID   string
-	dashboardID string
-	clientName  string
+	Mode       AttachMode
+	sessionID  string
+	windowID   string
+	clientName string
 }
 
 func (p AttachPlan) RequiresSessionLock() bool { return p.Mode == AttachModeSwitch }
@@ -722,6 +750,12 @@ func (p AttachPlan) RequiresSessionLock() bool { return p.Mode == AttachModeSwit
 // PrepareAttachOrSwitch validates the caller/server relationship and resolves
 // exact immutable targets without changing tmux state.
 func (m *Manager) PrepareAttachOrSwitch(ctx context.Context) (plan AttachPlan, err error) {
+	return m.PrepareAttachOrSwitchTo(ctx, "")
+}
+
+// PrepareAttachOrSwitchTo resolves a target window in the managed session.
+// An empty window ID targets the dashboard.
+func (m *Manager) PrepareAttachOrSwitchTo(ctx context.Context, windowID string) (plan AttachPlan, err error) {
 	const op = "tmux.attach_or_switch"
 	defer m.recoverError(op, &err)
 	paneID, insideTmux, err := m.callerPane(op)
@@ -746,7 +780,16 @@ func (m *Manager) PrepareAttachOrSwitch(ctx context.Context) (plan AttachPlan, e
 	if dashboard == nil {
 		return plan, domain.ResourceError(domain.ErrorCodeNotFound, op, m.config.DashboardWindow, "dashboard window does not exist", nil)
 	}
-	plan = AttachPlan{Mode: AttachModeInteractive, sessionID: session.ID, dashboardID: dashboard.ID}
+	targetID := windowID
+	if targetID == "" {
+		targetID = dashboard.ID
+	} else {
+		target, targetErr := m.windowByID(ctx, targetID)
+		if targetErr != nil || target == nil {
+			return plan, domain.ResourceError(domain.ErrorCodeNotFound, op, targetID, "target window does not exist", targetErr)
+		}
+	}
+	plan = AttachPlan{Mode: AttachModeInteractive, sessionID: session.ID, windowID: targetID}
 	clientName := ""
 	if insideTmux {
 		clients, queryErr := m.client.ListClients(ctx)
@@ -776,11 +819,11 @@ func (m *Manager) PrepareAttachOrSwitch(ctx context.Context) (plan AttachPlan, e
 func (m *Manager) ExecuteAttachOrSwitch(ctx context.Context, plan AttachPlan) (err error) {
 	const op = "tmux.attach_or_switch"
 	defer m.recoverError(op, &err)
-	if plan.sessionID == "" || plan.dashboardID == "" {
+	if plan.sessionID == "" || plan.windowID == "" {
 		return domain.NewError(domain.ErrorCodeInvalidArgument, op, "prepared target is incomplete", nil)
 	}
 	if plan.Mode == AttachModeInteractive {
-		if err := m.client.Attach(ctx, plan.sessionID, plan.dashboardID, m.config.Output, m.config.Error); err != nil {
+		if err := m.client.Attach(ctx, plan.sessionID, plan.windowID, m.config.Output, m.config.Error); err != nil {
 			return m.failure(op, "attach session", err)
 		}
 		return nil
@@ -788,7 +831,7 @@ func (m *Manager) ExecuteAttachOrSwitch(ctx context.Context, plan AttachPlan) (e
 	if plan.Mode != AttachModeSwitch || plan.clientName == "" {
 		return domain.NewError(domain.ErrorCodeInvalidArgument, op, "invalid prepared attach mode", nil)
 	}
-	if _, err := m.selectWindow(ctx, plan.dashboardID); err != nil {
+	if _, err := m.selectWindow(ctx, plan.windowID); err != nil {
 		return err
 	}
 	if err := m.client.SwitchClient(ctx, plan.clientName, plan.sessionID); err != nil {
@@ -806,6 +849,7 @@ type taggedWindow struct {
 	ProjectID string
 	Role      string
 	Owner     string
+	Profile   string
 }
 
 func (m *Manager) taggedWindows(ctx context.Context) ([]taggedWindow, error) {
@@ -827,11 +871,16 @@ func (m *Manager) taggedWindows(ctx context.Context) ([]taggedWindow, error) {
 		if err != nil {
 			return nil, m.failure("tmux.list_windows", "read ownership tag", err)
 		}
+		profile, _, err := m.client.WindowOption(ctx, window.ID, optionProfile)
+		if err != nil {
+			return nil, m.failure("tmux.list_windows", "read profile tag", err)
+		}
 		result = append(result, taggedWindow{
 			windowState: window,
 			ProjectID:   trimLineEndings(projectID),
 			Role:        trimLineEndings(role),
 			Owner:       trimLineEndings(owner),
+			Profile:     trimLineEndings(profile),
 		})
 	}
 	return result, nil

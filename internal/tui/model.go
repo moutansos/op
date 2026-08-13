@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	actionpolicy "github.com/moutansos/op/internal/action"
 	"github.com/moutansos/op/internal/domain"
 )
 
@@ -33,7 +32,7 @@ type overlay int
 
 const (
 	noOverlay overlay = iota
-	actionsOverlay
+	openersOverlay
 	createOverlay
 	cloneOverlay
 	worktreeOverlay
@@ -47,14 +46,14 @@ type Model struct {
 	options Options
 
 	projects list.Model
-	actions  []Action
+	openers  []ProjectOpener
 	inputs   []textinput.Model
 
 	width             int
 	height            int
 	section           section
 	overlay           overlay
-	actionIndex       int
+	openerIndex       int
 	inputIndex        int
 	worktreeProjectID string
 
@@ -106,7 +105,7 @@ func NewModel(ctx context.Context, service domain.Service, options Options) Mode
 		service:            service,
 		options:            options,
 		projects:           projects,
-		actions:            options.projectActions(),
+		openers:            options.projectOpeners(),
 		projectsRefreshing: true,
 		tmuxRefreshing:     true,
 		statsRefreshing:    true,
@@ -240,11 +239,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setError("Open failed", msg.err)
 			return m, nil
 		}
-		verb := "Opened"
-		if msg.result.Reused {
-			verb = "Selected"
+		if msg.result.Mode == domain.ProjectOpenModeGUI {
+			m.setStatus(fmt.Sprintf("Opened %s with %s", msg.result.Project.Name, msg.result.Profile))
+		} else {
+			verb := "Opened"
+			if msg.result.Reused {
+				verb = "Selected"
+			}
+			m.setStatus(fmt.Sprintf("%s %s in window %s", verb, msg.result.Project.Name, msg.result.Window.Name))
 		}
-		m.setStatus(fmt.Sprintf("%s %s in window %s", verb, msg.result.Project.Name, msg.result.Window.Name))
 		return m, m.refreshAfterMutation(false)
 
 	case actionFinishedMsg:
@@ -295,8 +298,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.overlay == createOverlay || m.overlay == cloneOverlay || m.overlay == worktreeOverlay {
 		return m.updateForm(key)
 	}
-	if m.overlay == actionsOverlay {
-		return m.updateActions(key)
+	if m.overlay == openersOverlay {
+		return m.updateOpeners(key)
 	}
 	if m.overlay == noOverlay && m.section == projectsSection && m.projects.SettingFilter() {
 		if key.String() == "enter" {
@@ -331,11 +334,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.openForm(cloneOverlay)
 	case "a":
 		if m.selectedProject() == nil {
-			m.setError("Actions unavailable", errors.New("select a project first"))
+			m.setError("Open unavailable", errors.New("select a project first"))
 			return m, nil
 		}
-		m.overlay, m.actionIndex = actionsOverlay, 0
+		m.overlay, m.openerIndex = openersOverlay, 0
 		return m, nil
+	case "w":
+		project := m.selectedProject()
+		if project == nil {
+			m.setError("Worktree unavailable", errors.New("select a project first"))
+			return m, nil
+		}
+		m.worktreeProjectID = project.ID
+		return m.openForm(worktreeOverlay)
 	case "enter":
 		if m.section != projectsSection {
 			return m, nil
@@ -372,42 +383,35 @@ func (m Model) startOpen() (tea.Model, tea.Cmd) {
 	m.finishProjectSelection(projectID, true)
 	m.operation = "open"
 	m.setStatus("Opening " + project.Name + "...")
-	return m, m.openProjectCmd(projectID)
+	return m, m.openProjectCmd(projectID, m.options.DefaultProfile)
 }
 
-func (m Model) updateActions(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateOpeners(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "esc":
 		m.overlay = noOverlay
 	case "q":
 		return m.quit()
 	case "up", "k":
-		m.actionIndex = (m.actionIndex + len(m.actions) - 1) % len(m.actions)
+		m.openerIndex = (m.openerIndex + len(m.openers) - 1) % len(m.openers)
 	case "down", "j":
-		m.actionIndex = (m.actionIndex + 1) % len(m.actions)
+		m.openerIndex = (m.openerIndex + 1) % len(m.openers)
 	case "enter":
 		project := m.selectedProject()
-		if project == nil || len(m.actions) == 0 {
+		if project == nil || len(m.openers) == 0 {
 			m.overlay = noOverlay
-			m.setError("Action unavailable", errors.New("select a project first"))
+			m.setError("Open unavailable", errors.New("select a project first"))
 			return m, nil
 		}
 		if m.operation != "" {
 			m.setError("Operation busy", errors.New(m.operation+" is still running"))
 			return m, nil
 		}
-		action := m.actions[m.actionIndex]
+		opener := m.openers[m.openerIndex]
 		m.overlay = noOverlay
-		if action.ID == actionpolicy.WorktreeID {
-			m.worktreeProjectID = project.ID
-			return m.openForm(worktreeOverlay)
-		}
-		m.operation = "action"
-		m.setStatus("Starting " + action.Name + "...")
-		if m.actionUsesTerminal(action.ID) {
-			return m, m.runTerminalActionCmd(project.ID, action.ID)
-		}
-		return m, m.runActionCmd(project.ID, action.ID)
+		m.operation = "open"
+		m.setStatus("Opening " + project.Name + " with " + opener.Name + "...")
+		return m, m.openProjectCmd(project.ID, opener.ID)
 	}
 	return m, nil
 }
@@ -502,21 +506,6 @@ func (m *Model) closeForm() {
 	m.inputIndex = 0
 	m.overlay = noOverlay
 	m.worktreeProjectID = ""
-}
-
-func (m Model) actionUsesTerminal(actionID string) bool {
-	switch actionpolicy.Classify(actionID) {
-	case actionpolicy.Nvim, actionpolicy.Shell:
-		return true
-	case actionpolicy.Code, actionpolicy.Worktree:
-		return false
-	}
-	for _, action := range m.actions {
-		if action.ID == actionID {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *Model) resizeChildren() {

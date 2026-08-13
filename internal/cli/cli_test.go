@@ -26,11 +26,13 @@ type fakeService struct {
 	currentFound    bool
 	ensureCalls     int
 	attachCalls     int
+	attachWindowID  string
 	resolveCalls    int
 	actionCalls     int
 	actionRequest   domain.RunProjectActionRequest
 	cloneRequest    domain.CloneRequest
 	openRequest     domain.OpenProjectRequest
+	openResult      domain.OpenProjectResult
 	createRequest   domain.CreateProjectRequest
 	worktreeRequest domain.CreateWorktreeRequest
 	ensureResult    domain.EnsureMainSessionResult
@@ -59,7 +61,13 @@ func (f *fakeService) CreateWorktree(_ context.Context, request domain.CreateWor
 
 func (f *fakeService) OpenProject(_ context.Context, request domain.OpenProjectRequest) (domain.OpenProjectResult, error) {
 	f.openRequest = request
-	return domain.OpenProjectResult{Project: domain.Project{ID: request.ProjectID, Name: "alpha"}, Window: domain.TmuxWindow{Name: "alpha"}}, f.err
+	if f.openResult.Project.ID != "" {
+		return f.openResult, f.err
+	}
+	return domain.OpenProjectResult{
+		Project: domain.Project{ID: request.ProjectID, Name: "alpha"}, Profile: request.Profile,
+		Mode: domain.ProjectOpenModeTmux, Window: domain.TmuxWindow{ID: "@alpha", Name: "alpha"},
+	}, f.err
 }
 
 func (f *fakeService) RunProjectAction(_ context.Context, request domain.RunProjectActionRequest) (domain.RunProjectActionResult, error) {
@@ -91,39 +99,51 @@ func (f *fakeService) AttachOrSwitch(context.Context) error {
 	return f.err
 }
 
+func (f *fakeService) AttachOrSwitchTo(_ context.Context, windowID string) error {
+	f.attachCalls++
+	f.attachWindowID = windowID
+	return f.err
+}
+
 type testRuntime struct {
-	service         *fakeService
-	stdin           *strings.Reader
-	stdout          bytes.Buffer
-	stderr          bytes.Buffer
-	configPath      string
-	appOptions      app.Options
-	lookup          map[string]string
-	tuiCalls        int
-	tuiOptions      tui.Options
-	serverCalls     int
-	serverOptions   server.Options
-	http            HTTPClient
-	warnings        []config.Warning
-	customCommands  []config.CustomCommand
-	guiEditors      bool
-	selectedAction  string
-	selectorCalls   int
-	selectorTitle   string
-	selectorActions []tui.Action
-	selectorStreams bool
-	selectorErr     error
-	serviceCalls    int
-	lookPath        func(string) (string, error)
+	service                 *fakeService
+	stdin                   *strings.Reader
+	stdout                  bytes.Buffer
+	stderr                  bytes.Buffer
+	configPath              string
+	appOptions              app.Options
+	lookup                  map[string]string
+	tuiCalls                int
+	tuiOptions              tui.Options
+	serverCalls             int
+	serverOptions           server.Options
+	http                    HTTPClient
+	warnings                []config.Warning
+	customCommands          []config.CustomCommand
+	projectOpeners          []config.ProjectOpener
+	guiEditors              bool
+	selectedAction          string
+	selectedProject         string
+	selectorCalls           int
+	selectorTitle           string
+	selectorActions         []tui.Action
+	selectorStreams         bool
+	selectorErr             error
+	projectSelectorCalls    int
+	projectSelectorTitle    string
+	projectSelectorProjects []domain.Project
+	serviceCalls            int
+	lookPath                func(string) (string, error)
 }
 
 func newTestRuntime() *testRuntime {
 	return &testRuntime{
-		service:        &fakeService{},
-		stdin:          strings.NewReader(""),
-		lookup:         make(map[string]string),
-		customCommands: []config.CustomCommand{{Name: "opencode", Command: "opencode {{path}}"}},
-		selectedAction: "opencode",
+		service:         &fakeService{},
+		stdin:           strings.NewReader(""),
+		lookup:          make(map[string]string),
+		customCommands:  []config.CustomCommand{{Name: "opencode", Command: "opencode {{path}}"}},
+		selectedAction:  "opencode",
+		selectedProject: "",
 	}
 }
 
@@ -134,6 +154,10 @@ func (r *testRuntime) options() Options {
 	cfg.SourcePath = "/config/config.json"
 	cfg.Server.TokenFile = "/token"
 	cfg.CustomCommands = r.customCommands
+	if r.projectOpeners != nil {
+		cfg.ProjectOpeners = r.projectOpeners
+		cfg.Tmux.DefaultProfile = r.projectOpeners[0].ID
+	}
 	cfg.Actions.GUIEditors = r.guiEditors
 	return Options{
 		Stdin:  r.stdin,
@@ -180,6 +204,22 @@ func (r *testRuntime) options() Options {
 			}
 			return nil, nil
 		},
+		SelectProject: func(_ context.Context, title string, projects []domain.Project, input io.Reader, output io.Writer) (*domain.Project, error) {
+			r.projectSelectorCalls++
+			r.projectSelectorTitle = title
+			r.projectSelectorProjects = append([]domain.Project(nil), projects...)
+			r.selectorStreams = input == r.stdin && output == &r.stdout
+			if r.selectorErr != nil {
+				return nil, r.selectorErr
+			}
+			for _, project := range projects {
+				if project.ID == r.selectedProject {
+					selected := project
+					return &selected, nil
+				}
+			}
+			return nil, nil
+		},
 		RunServer: func(_ context.Context, _ domain.Service, options server.Options) error {
 			r.serverCalls++
 			r.serverOptions = options
@@ -192,27 +232,48 @@ func (r *testRuntime) options() Options {
 	}
 }
 
-func TestDefaultDispatchEnsuresAndAttachesWithAbsoluteDashboardCommand(t *testing.T) {
-	runtime := newTestRuntime()
-	code := Run(context.Background(), []string{"--config", "custom.json", "--no-repo-update"}, runtime.options())
-	if code != 0 {
-		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
-	}
-	if runtime.configPath != "custom.json" {
-		t.Fatalf("config path = %q", runtime.configPath)
-	}
-	if runtime.service.ensureCalls != 1 || runtime.service.attachCalls != 1 {
-		t.Fatalf("ensure=%d attach=%d", runtime.service.ensureCalls, runtime.service.attachCalls)
-	}
-	if runtime.appOptions.EnableRepositoryUpdates || runtime.appOptions.DashboardCommand != "/opt/op --config /config/config.json --no-repo-update dashboard" {
-		t.Fatalf("app options = %+v", runtime.appOptions)
+func TestDefaultDispatchSelectsAndOpensProjectFromRandomShell(t *testing.T) {
+	for _, insideTmux := range []bool{false, true} {
+		t.Run(map[bool]string{false: "outside tmux", true: "unrecognized tmux window"}[insideTmux], func(t *testing.T) {
+			runtime := newTestRuntime()
+			project := domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha", Tags: []string{"api"}}
+			runtime.service.projects = []domain.Project{project}
+			runtime.selectedProject = project.ID
+			runtime.service.openResult = domain.OpenProjectResult{
+				Project: project, Profile: "nvim", Mode: domain.ProjectOpenModeTmux,
+				Window: domain.TmuxWindow{ID: "@7", Name: "alpha"},
+			}
+			if insideTmux {
+				runtime.lookup["TMUX"] = "inside"
+			}
+
+			code := Run(context.Background(), []string{"--config", "custom.json", "--no-repo-update"}, runtime.options())
+			if code != 0 {
+				t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+			}
+			if runtime.configPath != "custom.json" || runtime.projectSelectorCalls != 1 || runtime.projectSelectorTitle != "open project" || !runtime.selectorStreams {
+				t.Fatalf("selector calls=%d title=%q config=%q streams=%v", runtime.projectSelectorCalls, runtime.projectSelectorTitle, runtime.configPath, runtime.selectorStreams)
+			}
+			if len(runtime.projectSelectorProjects) != 1 || runtime.projectSelectorProjects[0].ID != project.ID || runtime.projectSelectorProjects[0].Path != project.Path {
+				t.Fatalf("selector projects = %+v", runtime.projectSelectorProjects)
+			}
+			if runtime.service.openRequest.ProjectID != project.ID || !runtime.service.openRequest.DeferSelection || runtime.service.openRequest.Profile != "" || runtime.service.openRequest.NewInstance {
+				t.Fatalf("open request = %+v", runtime.service.openRequest)
+			}
+			if runtime.service.attachCalls != 1 || runtime.service.attachWindowID != "@7" || runtime.service.actionCalls != 0 {
+				t.Fatalf("attach calls=%d target=%q actions=%d", runtime.service.attachCalls, runtime.service.attachWindowID, runtime.service.actionCalls)
+			}
+			if runtime.appOptions.EnableRepositoryUpdates || runtime.appOptions.DashboardCommand != "/opt/op --config /config/config.json --no-repo-update dashboard" {
+				t.Fatalf("app options = %+v", runtime.appOptions)
+			}
+		})
 	}
 }
 
 func TestDefaultDispatchRunsDashboardInInvokingPaneWhenRequested(t *testing.T) {
 	runtime := newTestRuntime()
 	runtime.service.ensureResult.StartDashboard = true
-	code := Run(context.Background(), nil, runtime.options())
+	code := Run(context.Background(), []string{"--no-target"}, runtime.options())
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
 	}
@@ -232,7 +293,7 @@ func TestTargetedDefaultChoosesConfiguredActionAndNoTargetOverrides(t *testing.T
 	if runtime.service.actionRequest != (domain.RunProjectActionRequest{ProjectID: "p1", Action: "opencode"}) {
 		t.Fatalf("action request = %+v", runtime.service.actionRequest)
 	}
-	if runtime.selectorCalls != 1 || runtime.selectorTitle != "Actions for alpha" || !runtime.selectorStreams {
+	if runtime.selectorCalls != 1 || runtime.selectorTitle != "actions for alpha" || !runtime.selectorStreams {
 		t.Fatalf("selector calls=%d title=%q direct streams=%v", runtime.selectorCalls, runtime.selectorTitle, runtime.selectorStreams)
 	}
 	if runtime.service.ensureCalls != 0 || runtime.service.attachCalls != 0 {
@@ -247,6 +308,31 @@ func TestTargetedDefaultChoosesConfiguredActionAndNoTargetOverrides(t *testing.T
 	}
 	if runtime.service.resolveCalls != 0 || runtime.service.ensureCalls != 1 || runtime.service.attachCalls != 1 {
 		t.Fatalf("resolve=%d ensure=%d attach=%d", runtime.service.resolveCalls, runtime.service.ensureCalls, runtime.service.attachCalls)
+	}
+}
+
+func TestRandomShellProjectSelectionCancelDoesNotMutateTmux(t *testing.T) {
+	runtime := newTestRuntime()
+	runtime.service.projects = []domain.Project{{ID: "p1", Name: "alpha", Path: "/repos/alpha"}}
+	if code := Run(context.Background(), nil, runtime.options()); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if runtime.projectSelectorCalls != 1 || runtime.service.openRequest.ProjectID != "" || runtime.service.attachCalls != 0 || runtime.service.ensureCalls != 0 {
+		t.Fatalf("selector=%d open=%+v attach=%d ensure=%d", runtime.projectSelectorCalls, runtime.service.openRequest, runtime.service.attachCalls, runtime.service.ensureCalls)
+	}
+}
+
+func TestRandomShellGUIProjectOpenDoesNotAttachTmux(t *testing.T) {
+	runtime := newTestRuntime()
+	project := domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"}
+	runtime.service.projects = []domain.Project{project}
+	runtime.selectedProject = project.ID
+	runtime.service.openResult = domain.OpenProjectResult{Project: project, Profile: "vscode", Mode: domain.ProjectOpenModeGUI}
+	if code := Run(context.Background(), nil, runtime.options()); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if runtime.service.attachCalls != 0 || !strings.Contains(runtime.stdout.String(), "Opened alpha with vscode") {
+		t.Fatalf("attach=%d stdout=%q", runtime.service.attachCalls, runtime.stdout.String())
 	}
 }
 
@@ -299,6 +385,13 @@ func TestTargetedActionSelectorIncludesConfiguredActionsAndGatesGUIAction(t *tes
 	if want := []string{"nvim", "shell", "code", "Nvim", "3"}; !slices.Equal(got, want) {
 		t.Fatalf("selector actions = %v, want %v", got, want)
 	}
+	labels := make([]string, len(runtime.selectorActions))
+	for index, action := range runtime.selectorActions {
+		labels[index] = action.Name
+	}
+	if want := []string{"nvim", "cd-here", "vs-code", "nvim", "3"}; !slices.Equal(labels, want) {
+		t.Fatalf("selector labels = %v, want %v", labels, want)
+	}
 }
 
 func TestTargetedActionSelectorOmitsGUIActionWhenDisabledAndCancels(t *testing.T) {
@@ -329,7 +422,7 @@ func TestDashboardUsesConfigOptionsWithoutAttaching(t *testing.T) {
 	if runtime.tuiCalls != 1 || runtime.service.ensureCalls != 0 || runtime.service.attachCalls != 0 {
 		t.Fatalf("tui=%d ensure=%d attach=%d", runtime.tuiCalls, runtime.service.ensureCalls, runtime.service.attachCalls)
 	}
-	if len(runtime.tuiOptions.Actions) != 1 || runtime.tuiOptions.Actions[0].ID != "opencode" || runtime.tuiOptions.StatsRefreshInterval != 2*time.Second {
+	if len(runtime.tuiOptions.ProjectOpeners) != 1 || runtime.tuiOptions.ProjectOpeners[0].ID != "nvim" || runtime.tuiOptions.StatsRefreshInterval != 2*time.Second {
 		t.Fatalf("tui options = %+v", runtime.tuiOptions)
 	}
 }
@@ -478,6 +571,26 @@ func TestNonTmuxCommandsDoNotRequireTmux(t *testing.T) {
 				t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
 			}
 		})
+	}
+}
+
+func TestGUIProjectOpenerDoesNotRequireTmux(t *testing.T) {
+	runtime := newTestRuntime()
+	runtime.projectOpeners = []config.ProjectOpener{{
+		ID: "vscode", Name: "VS Code", Mode: domain.ProjectOpenModeGUI, Command: "code {{path}}",
+	}}
+	runtime.service.projects = []domain.Project{{ID: "project", Name: "project"}}
+	runtime.lookPath = func(name string) (string, error) {
+		if name == "tmux" {
+			return "", errors.New("not available")
+		}
+		return "/usr/bin/" + name, nil
+	}
+	if code := Run(context.Background(), []string{"open", "project"}, runtime.options()); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if runtime.service.openRequest.Profile != "" {
+		t.Fatalf("open request = %+v", runtime.service.openRequest)
 	}
 }
 

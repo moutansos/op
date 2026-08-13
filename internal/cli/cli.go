@@ -34,6 +34,7 @@ type Service interface {
 	domain.Service
 	ResolveCurrentProject(context.Context) (domain.Project, bool, error)
 	AttachOrSwitch(context.Context) error
+	AttachOrSwitchTo(context.Context, string) error
 }
 
 type HTTPClient interface {
@@ -41,21 +42,22 @@ type HTTPClient interface {
 }
 
 type Options struct {
-	Stdin        io.Reader
-	Stdout       io.Writer
-	Stderr       io.Writer
-	LookupEnv    func(string) string
-	Executable   func() (string, error)
-	LookPath     func(string) (string, error)
-	ReadFile     func(string) ([]byte, error)
-	LoadConfig   func(string) (config.LoadResult, error)
-	NewService   func(context.Context, config.Config, app.Options) (Service, error)
-	RunTUI       func(context.Context, domain.Service, tui.Options) error
-	SelectAction tui.Selector
-	RunServer    func(context.Context, domain.Service, server.Options) error
-	HTTPClient   HTTPClient
-	Signals      func(context.Context) (context.Context, context.CancelFunc)
-	Version      Version
+	Stdin         io.Reader
+	Stdout        io.Writer
+	Stderr        io.Writer
+	LookupEnv     func(string) string
+	Executable    func() (string, error)
+	LookPath      func(string) (string, error)
+	ReadFile      func(string) ([]byte, error)
+	LoadConfig    func(string) (config.LoadResult, error)
+	NewService    func(context.Context, config.Config, app.Options) (Service, error)
+	RunTUI        func(context.Context, domain.Service, tui.Options) error
+	SelectAction  tui.Selector
+	SelectProject tui.ProjectSelector
+	RunServer     func(context.Context, domain.Service, server.Options) error
+	HTTPClient    HTTPClient
+	Signals       func(context.Context) (context.Context, context.CancelFunc)
+	Version       Version
 }
 
 type runner struct {
@@ -163,6 +165,9 @@ func withDefaults(options Options) Options {
 	}
 	if options.SelectAction == nil {
 		options.SelectAction = tui.SelectAction
+	}
+	if options.SelectProject == nil {
+		options.SelectProject = tui.SelectProject
 	}
 	if options.RunServer == nil {
 		options.RunServer = runServer

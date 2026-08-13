@@ -205,7 +205,7 @@ func TestQuitCancelsPendingMutationCommands(t *testing.T) {
 		},
 		{
 			name:    "open",
-			command: func(model Model) tea.Cmd { return model.openProjectCmd("project") },
+			command: func(model Model) tea.Cmd { return model.openProjectCmd("project", model.options.DefaultProfile) },
 		},
 		{
 			name:    "action",

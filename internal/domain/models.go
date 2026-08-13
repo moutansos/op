@@ -21,6 +21,15 @@ const (
 	GitStateNotRepository GitState = "not_repository"
 )
 
+// ProjectOpenMode identifies whether a project profile opens in the managed
+// tmux workspace or in a separate graphical application.
+type ProjectOpenMode string
+
+const (
+	ProjectOpenModeTmux ProjectOpenMode = "tmux"
+	ProjectOpenModeGUI  ProjectOpenMode = "gui"
+)
+
 // Project is the stable catalog representation shared by every front end.
 type Project struct {
 	ID       string      `json:"id"`
@@ -53,9 +62,10 @@ type CreateWorktreeRequest struct {
 }
 
 type OpenProjectRequest struct {
-	ProjectID   string `json:"projectId"`
-	Profile     string `json:"profile,omitempty"`
-	NewInstance bool   `json:"newInstance,omitempty"`
+	ProjectID      string `json:"projectId"`
+	Profile        string `json:"profile,omitempty"`
+	NewInstance    bool   `json:"newInstance,omitempty"`
+	DeferSelection bool   `json:"-"`
 }
 
 type RunProjectActionRequest struct {
@@ -79,9 +89,11 @@ type CreateWorktreeResult struct {
 }
 
 type OpenProjectResult struct {
-	Project Project    `json:"project"`
-	Window  TmuxWindow `json:"window"`
-	Reused  bool       `json:"reused"`
+	Project Project         `json:"project"`
+	Profile string          `json:"profile"`
+	Mode    ProjectOpenMode `json:"mode"`
+	Window  TmuxWindow      `json:"window,omitempty"`
+	Reused  bool            `json:"reused"`
 }
 
 type RunProjectActionResult struct {

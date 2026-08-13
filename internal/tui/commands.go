@@ -86,8 +86,8 @@ func (m Model) loadStatsCmd() tea.Cmd {
 	}
 }
 
-func (m Model) openProjectCmd(projectID string) tea.Cmd {
-	request := domain.OpenProjectRequest{ProjectID: projectID, Profile: m.options.DefaultProfile}
+func (m Model) openProjectCmd(projectID, profile string) tea.Cmd {
+	request := domain.OpenProjectRequest{ProjectID: projectID, Profile: profile}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, m.options.OperationTimeout)
 		defer cancel()

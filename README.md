@@ -30,7 +30,8 @@ Linux/WSL runtime dependencies:
   pin; production execution uses the context-aware adapter-local tmux command layer.
 - `git` for discovery state, pulls, clones, repository creation, and worktrees.
 - The configured `preferredShell`, `zsh` by default.
-- `nvim` for the default project profile and Neovim action.
+- The command configured for the default project opener (`nvim .` by default), plus `nvim` for the
+  in-project Neovim action.
 - `code` only when `actions.guiEditors` is enabled.
 
 Native Windows proxy dependency:
@@ -115,10 +116,10 @@ Commands:
 
 | Command                                                                       | Behavior                                                                                                                                                                                    |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `op`                                                                          | Reconcile the managed session and attach to it from outside tmux, or switch the current tmux client to it. Inside a tagged or matching project window, open a fuzzy project-action selector instead. |
+| `op`                                                                          | In a random shell, fuzzy-select and open a project. Inside a tagged or matching project window, open its action selector instead.                                         |
 | `op dashboard`                                                                | Run the dashboard in the current terminal pane. Normally started by session reconciliation.                                                                                                 |
 | `op projects [--json]`                                                        | List discovered projects and custom entries.                                                                                                                                                |
-| `op open <id-or-exact-name> [--profile NAME] [--new-instance]`                | Open/select a project window. Only the configured default profile currently exists.                                                                                                         |
+| `op open <id-or-exact-name> [--profile NAME] [--new-instance]`                | Open a project with the default or named configured opener. `--new-instance` applies to tmux openers.                                                                                        |
 | `op clone <url> [--directory NAME] [--open] [--profile NAME]`                 | Clone an HTTPS, SSH, or SCP-style Git URL. `--profile` requires `--open`.                                                                                                                   |
 | `op new <name> [--open] [--profile NAME]`                                     | Initialize a repository under `repoDirectory`.                                                                                                                                              |
 | `op worktree <project> <branch> [--directory NAME] [--open] [--profile NAME]` | Create a new branch and sibling worktree.                                                                                                                                                   |
@@ -133,15 +134,18 @@ Use `op help`, `op remote --help`, or `op <command> --help` for concise command 
 
 ### Default Behavior
 
-Outside tmux, plain `op` creates or reconciles the dashboard and attaches to the managed session.
-Inside tmux, it switches the current client rather than nesting a second client.
+From an ordinary shell, plain `op` lists the project catalog in an in-process fuzzy selector. Search
+matches project names, path names, full paths, and tags. Selecting a project opens it with the
+configured default profile. A tmux opener attaches an outside shell, or switches an existing tmux
+client, directly to the selected project window; a GUI opener launches without changing tmux.
 
 When plain `op` is run inside a project window, it first resolves the `@op-project-id` window tag,
 then falls back to an exact project/window-name match. It opens an in-process fuzzy selector for
-Neovim, shell, optional VS Code, and configured custom actions. Typing filters immediately;
+`nvim`, `cd-here`, optional `vs-code`, and configured custom actions. Typing filters immediately;
 `up`/`down` or `ctrl+p`/`ctrl+n` navigates, `enter` selects, and `esc`/`ctrl+c` cancels. The selector
 uses Bubble Tea/Bubbles, invokes no external `fzf`, and restores the terminal before starting the
-selected action. `--no-target` bypasses the selector and returns to the managed dashboard.
+selected action. `--no-target` bypasses both targeted project actions and random-shell project
+selection, returning to the managed dashboard instead.
 
 Opening an existing project selects its healthy tagged window. `--new-instance` creates a suffixed
 additional window. A normal local `open` fast-forward pulls a clean Git worktree before opening it
@@ -161,8 +165,9 @@ Keys:
 | -------------------- | ---------------------------------------------------------------------------------------- |
 | `/`                  | Start fuzzy filtering in the project list. Window focus also re-enters filter mode.      |
 | `up`/`down`, `j`/`k` | Navigate the focused list or action chooser.                                             |
-| `enter`              | Open the selected project, run the selected action, or submit a form.                    |
-| `a`                  | Choose Neovim, shell, worktree, optional VS Code, or a configured custom command.        |
+| `enter`              | Open the selected project with the default configured opener, or submit a form.          |
+| `a`                  | Choose a configured tmux or GUI project opener.                                          |
+| `w`                  | Create a worktree for the selected project.                                              |
 | `n`                  | Create and open a repository.                                                            |
 | `c`                  | Clone and open a repository.                                                             |
 | `tab`, `shift+tab`   | Move between dashboard sections or form fields.                                          |
@@ -176,13 +181,10 @@ with Bubble Tea/Bubbles and does not invoke `fzf`. The dashboard requests termin
 returning to its window restores the Projects section and filter mode while preserving the current
 query. `op` enables tmux focus events when it reconciles the managed session.
 
-Neovim, shell, and configured custom actions temporarily release the alternate screen while they own
-the terminal, then restore the dashboard when they exit. These terminal actions are not bounded by
-the dashboard operation timeout; they continue until the user exits them or the `op` process context
-is canceled. Production `op` cancels that context on `Ctrl+C`/interrupt and, on Unix, `SIGTERM`,
-terminating the active launched process. Create, clone, worktree, open, and nonterminal actions
-remain bounded operations, and create, clone, and worktree forms open their result using the
-configured default profile.
+Dashboard search openers are separate from actions available when plain `op` targets an already-open
+project. Dashboard `enter` and `a` choose how the project should open; the targeted selector keeps
+`nvim`, `cd-here`, optional `vs-code`, and custom commands as actions against the current project. Create,
+clone, and worktree forms open their result using the configured default profile.
 
 ## Configuration
 
@@ -213,6 +215,20 @@ The canonical file is JSON:
   "actions": {
     "guiEditors": false
   },
+  "projectOpeners": [
+    {
+      "id": "nvim",
+      "name": "Neovim in tmux",
+      "mode": "tmux",
+      "command": "nvim ."
+    },
+    {
+      "id": "vscode",
+      "name": "VS Code",
+      "mode": "gui",
+      "command": "code {{path}}"
+    }
+  ],
   "customEntries": [
     {
       "name": "nvim-config",
@@ -260,6 +276,24 @@ systemd user unit.
 Unknown JSON fields currently produce warnings and are ignored. Canonical fields take precedence
 over legacy aliases.
 
+### Project Openers
+
+`projectOpeners` defines the choices shown by dashboard project search. `tmux.defaultProfile` is the
+opener ID used by `enter`, create, clone, worktree, and `op open` when no profile is supplied.
+
+- `mode: "tmux"` creates or selects a managed tmux project window. `command` runs in its main pane;
+  the configured preferred-shell pane is still created below it. Windows are reused by project ID
+  and opener ID, so the same project can have separate Neovim and opencode windows.
+- `mode: "gui"` runs `command` in the project directory without creating or selecting a tmux
+  window. Set `runInPreferredShell` only when the command needs shell syntax.
+- `{{path}}` and `{{oproot}}` use the same shell-safe substitutions as custom commands. Direct GUI
+  commands are split into an executable and arguments without shell evaluation.
+
+For WSL, GUI opener commands can call Windows-visible launchers already available from WSL, for
+example `code {{path}}` or a configured Visual Studio helper. A native-Windows Neovim tmux layout can
+likewise be represented by a tmux opener command that starts the appropriate Windows executable from
+WSL; `op` remains responsible for the tmux layout rather than hardcoding editor-specific variants.
+
 ### Custom Commands
 
 Custom command names appear as local project actions. Two placeholders are supported:
@@ -269,9 +303,10 @@ Custom command names appear as local project actions. Two placeholders are suppo
   or repository checkout.
 
 Both substitutions are shell-quoted. With `runInPreferredShell: true`, the substituted command is
-interpreted by the configured shell (`-ic`, or `-NoExit -Command` for PowerShell-compatible shells).
-With `false`, the command is split into an executable and arguments without shell evaluation;
-operators such as `&&`, pipes, and redirections are rejected.
+interpreted by the configured shell. After the command exits, the preferred shell remains open in
+the project directory (`-NoExit` for PowerShell-compatible shells; other shells are restarted after
+`-ic` completes). With `false`, the command is split into an executable and arguments without shell
+evaluation; operators such as `&&`, pipes, and redirections are rejected.
 
 Names are case-sensitive and must not collide with built-in action IDs: `nvim`, `code`, `shell`,
 `worktree`, or the reserved `worktree:<branch>` syntax. Labels that merely contain reserved words,
@@ -300,8 +335,8 @@ The loader accepts the previous configuration for one migration window and print
 | `--no-repo-update`                                                                | Retained.                                                                                                                                            |
 | `--continuous`, `<< Exit >>`                                                      | Retired; the dashboard supplies the persistent interaction loop and `q` exits it.                                                                    |
 | `--force-native`, `--force-powershell`                                            | Retired because there is one Go implementation.                                                                                                      |
-| `cd-here`                                                                         | Replaced by the shell action, which opens the configured shell in the project directory. A child process cannot change its parent shell's directory. |
-| `vs`, `nvim-win`, and other Windows GUI launch variants                           | Retired from local actions. Use the Linux/WSL `nvim` action or enable `code`; native Windows local orchestration is out of scope.                    |
+| `cd-here`                                                                         | Opens the configured shell in the project directory. A child process cannot change its parent shell's directory.                                    |
+| `vs`, `nvim-win`, and other Windows launch variants                               | Configure them as named `projectOpeners`; native `op.exe` still delegates orchestration to WSL.                                                     |
 | PowerShell worktree helper                                                        | Replaced by `op worktree`, which invokes `git worktree add -b` directly.                                                                             |
 
 After migration, rename old fields to the canonical spellings and remove ignored Windows/WSL fields.
@@ -320,7 +355,7 @@ After migration, rename old fields to the canonical spellings and remove ignored
   The dashboard runs as a child of that shell, so exiting it preserves the window and plain `op`
   restarts it in the same managed pane.
 - Each project window is tagged with project ID, path, profile, and ownership options.
-- The default project layout starts `nvim .` inside the configured preferred shell in the top/main
+- The default project layout starts the selected tmux opener command (`nvim .` by default) inside the configured preferred shell in the top/main
   pane and starts the preferred shell in a bottom pane resized to `tmux.shellPaneRows` (20 by
   default). The top shell remains in the project directory after the editor exits normally or
   fails, so the pane and window stay reusable. PowerShell-family shells use `-NoExit`; other shells
@@ -332,9 +367,9 @@ After migration, rename old fields to the canonical spellings and remove ignored
   necessary.
 - When `tmux.socket` is explicit, current-pane targeting and client switching are rejected if `op`
   was invoked from a different tmux server.
-- Outside tmux, the session lock is released after resolving the exact dashboard session/window IDs
-  and before the interactive attach blocks. Inside tmux, targeted select/switch/verification remains
-  one serialized transaction.
+- Outside tmux, the session lock is released after resolving the exact target session/window IDs and
+  before the interactive attach blocks. Inside tmux, targeted select/switch/verification remains one
+  serialized transaction.
 
 Project/session/window names and paths containing control characters or gotmux's `-:-` query
 separator are rejected. Session and dashboard names also cannot contain `:` or `.`.

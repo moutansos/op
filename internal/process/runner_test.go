@@ -49,6 +49,31 @@ func TestBuiltInLaunchCommands(t *testing.T) {
 	}
 }
 
+func TestConfiguredGUIProjectOpenersRunDirectlyOrInPreferredShell(t *testing.T) {
+	runner := &fakeRunner{}
+	launcher := newLauncher(t, runner, processrunner.Options{
+		PreferredShell: "/usr/bin/zsh",
+		OpRoot:         "/opt/op root",
+		ProjectOpeners: []config.ProjectOpener{
+			{ID: "vscode", Name: "VS Code", Mode: domain.ProjectOpenModeGUI, Command: "code {{path}}"},
+			{ID: "visual-studio", Name: "Visual Studio", Mode: domain.ProjectOpenModeGUI, Command: "open-vs {{path}} {{oproot}}", RunInPreferredShell: true},
+		},
+	})
+
+	for _, id := range []string{"vscode", "visual-studio"} {
+		if err := launcher.LaunchProjectOpener(context.Background(), id, "/repos/project path"); err != nil {
+			t.Fatalf("LaunchProjectOpener(%q) error = %v", id, err)
+		}
+	}
+	want := []processrunner.Command{
+		{Directory: "/repos/project path", Name: "code", Args: []string{"/repos/project path"}},
+		{Directory: "/repos/project path", Name: "/usr/bin/zsh", Args: []string{"-ic", "open-vs '/repos/project path' '/opt/op root'"}},
+	}
+	if !reflect.DeepEqual(runner.commands, want) {
+		t.Fatalf("commands = %#v, want %#v", runner.commands, want)
+	}
+}
+
 func TestPreferredShellSupportsExecutableArguments(t *testing.T) {
 	runner := &fakeRunner{}
 	launcher := newLauncher(t, runner, processrunner.Options{
@@ -72,7 +97,7 @@ func TestPreferredShellSupportsExecutableArguments(t *testing.T) {
 	want := []processrunner.Command{
 		{Directory: "/repos/project", Name: "/usr/bin/zsh", Args: []string{"-l", "--no-rcs"}},
 		{Directory: "/repos/project", Name: "/usr/bin/zsh", Args: []string{"-l", "--no-rcs", "-ic", "nvim .; exec /usr/bin/zsh -l --no-rcs"}},
-		{Directory: "/repos/project", Name: "/usr/bin/zsh", Args: []string{"-l", "--no-rcs", "-ic", "git status && printf done"}},
+		{Directory: "/repos/project", Name: "/usr/bin/zsh", Args: []string{"-l", "--no-rcs", "-ic", "git status && printf done; exec /usr/bin/zsh -l --no-rcs"}},
 	}
 	if !reflect.DeepEqual(runner.commands, want) {
 		t.Fatalf("commands = %#v, want %#v", runner.commands, want)
@@ -156,7 +181,7 @@ func TestCustomCommandRunsInPreferredShell(t *testing.T) {
 	if err := launcher.RunCustom(context.Background(), "opencode", "/repos/project one"); err != nil {
 		t.Fatalf("RunCustom() error = %v", err)
 	}
-	wantCommand := "cd '/opt/op root' && opencode '/repos/project one'"
+	wantCommand := "cd '/opt/op root' && opencode '/repos/project one'; exec /usr/bin/zsh"
 	want := []processrunner.Command{{
 		Directory: "/repos/project one",
 		Name:      "/usr/bin/zsh",

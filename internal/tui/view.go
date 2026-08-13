@@ -164,7 +164,7 @@ func (m Model) statusPanel(width, height int) string {
 	if m.statusErr {
 		status = errorStyle.Render(status)
 	}
-	help := dimStyle.Render("enter open   / filter   a actions   n new   c clone   tab section   r refresh   q quit")
+	help := dimStyle.Render("enter default   a open with   w worktree   / filter   n new   c clone   r refresh   q quit")
 	return renderPanel("Actions / Status", status+"\n"+help, width, height, false, nil)
 }
 
@@ -244,15 +244,15 @@ func (m Model) renderTmux(_ int, height int) string {
 func (m Model) overlayView(_ string) string {
 	var title, body string
 	switch m.overlay {
-	case actionsOverlay:
-		title = "Project Actions"
-		lines := make([]string, 0, len(m.actions)+1)
-		for index, action := range m.actions {
+	case openersOverlay:
+		title = "Open Project With"
+		lines := make([]string, 0, len(m.openers)+1)
+		for index, opener := range m.openers {
 			marker := "  "
-			if index == m.actionIndex {
+			if index == m.openerIndex {
 				marker = "> "
 			}
-			lines = append(lines, marker+action.Name)
+			lines = append(lines, marker+opener.Name+"  "+dimStyle.Render(string(opener.Mode)))
 		}
 		lines = append(lines, "", dimStyle.Render("enter run   esc cancel"))
 		body = strings.Join(lines, "\n")

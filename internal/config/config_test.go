@@ -27,6 +27,9 @@ func TestDefaultsAreCanonical(t *testing.T) {
 	if config.Server.Listen != "127.0.0.1:8787" || config.Server.Enabled || config.Actions.GUIEditors {
 		t.Fatalf("unexpected server/action defaults: %#v %#v", config.Server, config.Actions)
 	}
+	if len(config.ProjectOpeners) != 1 || config.ProjectOpeners[0].ID != "nvim" || config.ProjectOpeners[0].Mode != domain.ProjectOpenModeTmux || config.ProjectOpeners[0].Command != "nvim ." {
+		t.Fatalf("unexpected project opener defaults: %#v", config.ProjectOpeners)
+	}
 	if config.CustomEntries == nil || config.CustomCommands == nil {
 		t.Fatal("collection defaults must be non-nil for canonical JSON arrays")
 	}
@@ -88,6 +91,16 @@ func TestMigrateLegacyConfiguration(t *testing.T) {
 	}
 	if config.CustomCommands[0].Command != "agent --root {{oproot}} {{path}}" {
 		t.Fatalf("command placeholders were expanded unexpectedly: %q", config.CustomCommands[0].Command)
+	}
+}
+
+func TestMigrateLegacyDefaultProfileToFixedNvimOpener(t *testing.T) {
+	config, _, err := Migrate([]byte(`{"tmux":{"defaultProfile":"editor"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Tmux.DefaultProfile != "editor" || len(config.ProjectOpeners) != 1 || config.ProjectOpeners[0].ID != "editor" || config.ProjectOpeners[0].Command != "nvim ." {
+		t.Fatalf("legacy profile migration = %#v %#v", config.Tmux, config.ProjectOpeners)
 	}
 }
 
@@ -278,6 +291,10 @@ func TestValidateRejectsInvalidValues(t *testing.T) {
 		{name: "newline window", field: "tmux.dashboardWindow", edit: func(c *Config) { c.Tmux.DashboardWindow = "bad\nname" }},
 		{name: "rows", field: "tmux.shellPaneRows", edit: func(c *Config) { c.Tmux.ShellPaneRows = 0 }},
 		{name: "duration", field: "stats.refreshInterval", edit: func(c *Config) { c.Stats.RefreshInterval = NewDuration(0) }},
+		{name: "no openers", field: "projectOpeners", edit: func(c *Config) { c.ProjectOpeners = nil }},
+		{name: "unknown default opener", field: "tmux.defaultProfile", edit: func(c *Config) { c.Tmux.DefaultProfile = "missing" }},
+		{name: "duplicate opener", field: "projectOpeners[1].id", edit: func(c *Config) { c.ProjectOpeners = append(c.ProjectOpeners, c.ProjectOpeners[0]) }},
+		{name: "invalid opener mode", field: "projectOpeners[0].mode", edit: func(c *Config) { c.ProjectOpeners[0].Mode = "terminal" }},
 		{name: "listen", field: "server.listen", edit: func(c *Config) { c.Server.Listen = "localhost" }},
 		{name: "tls pair", field: "server", edit: func(c *Config) { c.Server.TLSCertFile = filepath.Join(t.TempDir(), "cert") }},
 		{name: "non-loopback tls", field: "server", edit: func(c *Config) { c.Server.Listen = "0.0.0.0:8787" }},
