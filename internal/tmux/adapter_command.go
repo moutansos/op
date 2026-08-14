@@ -557,11 +557,19 @@ func quoteTmuxArgument(value string) string {
 }
 
 func (r rawTmux) field(ctx context.Context, target, name string) (string, error) {
-	value, err := r.run(ctx, "display-message", "-p", "-t", target, "#{"+name+"}")
+	value, err := r.run(ctx, fieldArgs(target, name)...)
 	if err != nil {
 		return "", err
 	}
 	return trimOneLineEnding(value), nil
+}
+
+func fieldArgs(target, name string) []string {
+	format := "#{" + name + "}"
+	if validatePaneID(target) == nil {
+		return []string{"list-panes", "-t", target, "-f", "#{==:#{pane_id}," + target + "}", "-F", format}
+	}
+	return []string{"display-message", "-p", "-t", target, format}
 }
 
 func (r rawTmux) intField(ctx context.Context, target, name string, minimum, maximum int) (int, error) {

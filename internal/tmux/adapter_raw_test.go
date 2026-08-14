@@ -114,6 +114,55 @@ func TestRawSingleFieldPreservesDelimiterWhitespaceAndEmbeddedNewline(t *testing
 	}
 }
 
+func TestRawPaneFieldUsesFilteredListPanes(t *testing.T) {
+	root := t.TempDir()
+	arguments := filepath.Join(root, "arguments")
+	executable := writeExecutable(t, root, "tmux-pane-field", "#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+arguments+"'\nprintf '3\\n'")
+	value, err := (rawTmux{executable: executable, socket: filepath.Join(root, "tmux.sock")}).intField(context.Background(), "%15", "pane_index", 0, 100)
+	if err != nil || value != 3 {
+		t.Fatalf("pane field = %d, %v", value, err)
+	}
+	data, err := os.ReadFile(arguments)
+	if err != nil {
+		t.Fatalf("read query arguments: %v", err)
+	}
+	want := strings.Join([]string{"-S", filepath.Join(root, "tmux.sock"), "list-panes", "-t", "%15", "-f", "#{==:#{pane_id},%15}", "-F", "#{pane_index}", ""}, "\n")
+	if string(data) != want {
+		t.Fatalf("pane field arguments = %q, want %q", data, want)
+	}
+}
+
+func TestRawWindowFieldUsesDisplayMessage(t *testing.T) {
+	root := t.TempDir()
+	arguments := filepath.Join(root, "arguments")
+	executable := writeExecutable(t, root, "tmux-window-field", "#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+arguments+"'\nprintf '2\\n'")
+	value, err := (rawTmux{executable: executable}).intField(context.Background(), "@6", "window_index", 0, 100)
+	if err != nil || value != 2 {
+		t.Fatalf("window field = %d, %v", value, err)
+	}
+	data, err := os.ReadFile(arguments)
+	if err != nil {
+		t.Fatalf("read query arguments: %v", err)
+	}
+	want := strings.Join([]string{"display-message", "-p", "-t", "@6", "#{window_index}", ""}, "\n")
+	if string(data) != want {
+		t.Fatalf("window field arguments = %q, want %q", data, want)
+	}
+}
+
+func TestFieldArgs(t *testing.T) {
+	got := strings.Join(fieldArgs("%15", "pane_index"), " ")
+	want := "list-panes -t %15 -f #{==:#{pane_id},%15} -F #{pane_index}"
+	if got != want {
+		t.Fatalf("fieldArgs(pane) = %q, want %q", got, want)
+	}
+	got = strings.Join(fieldArgs("@6", "window_index"), " ")
+	want = "display-message -p -t @6 #{window_index}"
+	if got != want {
+		t.Fatalf("fieldArgs(window) = %q, want %q", got, want)
+	}
+}
+
 func TestNewStopsStalledInitializationWithTypedDeadline(t *testing.T) {
 	root := t.TempDir()
 	writeExecutable(t, root, "tmux", "#!/bin/sh\nexec /bin/sleep 30\n")
