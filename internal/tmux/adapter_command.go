@@ -251,54 +251,108 @@ func (c *commandClient) ListPanes(ctx context.Context, windowID string) ([]paneS
 	if err := validateWindowID(windowID); err != nil {
 		return nil, err
 	}
-	ids, err := c.raw.listIDs(ctx, validatePaneID, "list-panes", "-t", windowID, "-F", "#{pane_id}")
+	output, err := c.raw.run(ctx, paneRecordArgs(windowID)...)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]paneState, 0, len(ids))
-	for _, id := range ids {
-		index, err := c.raw.intField(ctx, id, "pane_index", 0, int(^uint(0)>>1))
+	return parsePaneRecords(output)
+}
+
+// paneRecordFields is ordered so that free-form values sit last: parsing keeps
+// any stray separator inside the trailing field instead of shifting columns.
+var paneRecordFields = []string{
+	"pane_id",
+	"pane_index",
+	"pane_pid",
+	"pane_active",
+	"pane_dead",
+	"pane_at_top",
+	"pane_at_bottom",
+	"pane_height",
+	"pane_current_command",
+	"pane_current_path",
+}
+
+// paneRecordSeparator must survive tmux format output untouched. tmux escapes
+// other control bytes octally (a literal separator would come back as "\037"),
+// while tabs pass through verbatim in both the format and the expanded values.
+// A tab inside a path is therefore possible, so the free-form path is parsed
+// last and keeps any extra separators.
+const paneRecordSeparator = "\t"
+
+// paneRecordArgs reads every pane field in one tmux call. Querying fields one
+// at a time raced with pane death: a pane that exited between calls produced an
+// empty value and failed the whole snapshot.
+func paneRecordArgs(windowID string) []string {
+	formats := make([]string, len(paneRecordFields))
+	for i, name := range paneRecordFields {
+		formats[i] = "#{" + name + "}"
+	}
+	return []string{"list-panes", "-t", windowID, "-F", strings.Join(formats, paneRecordSeparator)}
+}
+
+func parsePaneRecords(output string) ([]paneState, error) {
+	output = trimOneLineEnding(output)
+	if output == "" {
+		return []paneState{}, nil
+	}
+	lines := strings.Split(output, "\n")
+	result := make([]paneState, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		pane, err := parsePaneRecord(strings.TrimSuffix(line, "\r"))
 		if err != nil {
 			return nil, err
 		}
-		pid, err := c.raw.intField(ctx, id, "pane_pid", 0, int(^uint32(0)>>1))
-		if err != nil {
-			return nil, err
+		if _, duplicate := seen[pane.ID]; duplicate {
+			return nil, fmt.Errorf("tmux returned duplicate identity %q", pane.ID)
 		}
-		command, err := c.raw.field(ctx, id, "pane_current_command")
-		if err != nil {
-			return nil, err
-		}
-		path, err := c.raw.field(ctx, id, "pane_current_path")
-		if err != nil {
-			return nil, err
-		}
-		active, err := c.raw.boolField(ctx, id, "pane_active")
-		if err != nil {
-			return nil, err
-		}
-		dead, err := c.raw.boolField(ctx, id, "pane_dead")
-		if err != nil {
-			return nil, err
-		}
-		atTop, err := c.raw.boolField(ctx, id, "pane_at_top")
-		if err != nil {
-			return nil, err
-		}
-		atBottom, err := c.raw.boolField(ctx, id, "pane_at_bottom")
-		if err != nil {
-			return nil, err
-		}
-		height, err := c.raw.intField(ctx, id, "pane_height", 0, int(^uint(0)>>1))
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, paneState{
-			ID: id, Index: index, PID: int32(pid), CurrentCommand: command, CurrentPath: path,
-			Active: active, Dead: dead, AtTop: atTop, AtBottom: atBottom, Height: height,
-		})
+		seen[pane.ID] = struct{}{}
+		result = append(result, pane)
 	}
 	return result, nil
+}
+
+func parsePaneRecord(line string) (paneState, error) {
+	values := strings.SplitN(line, paneRecordSeparator, len(paneRecordFields))
+	if len(values) != len(paneRecordFields) {
+		return paneState{}, fmt.Errorf("tmux returned malformed pane record %q", line)
+	}
+	pane := paneState{ID: values[0], CurrentCommand: values[8], CurrentPath: values[9]}
+	if err := validatePaneID(pane.ID); err != nil {
+		return paneState{}, fmt.Errorf("tmux returned malformed identity %q: %w", pane.ID, err)
+	}
+	index, err := parseIntField("pane_index", values[1], 0, int(^uint(0)>>1))
+	if err != nil {
+		return paneState{}, err
+	}
+	pid, err := parseIntField("pane_pid", values[2], 0, int(^uint32(0)>>1))
+	if err != nil {
+		return paneState{}, err
+	}
+	active, err := parseBoolField("pane_active", values[3])
+	if err != nil {
+		return paneState{}, err
+	}
+	dead, err := parseBoolField("pane_dead", values[4])
+	if err != nil {
+		return paneState{}, err
+	}
+	atTop, err := parseBoolField("pane_at_top", values[5])
+	if err != nil {
+		return paneState{}, err
+	}
+	atBottom, err := parseBoolField("pane_at_bottom", values[6])
+	if err != nil {
+		return paneState{}, err
+	}
+	height, err := parseIntField("pane_height", values[7], 0, int(^uint(0)>>1))
+	if err != nil {
+		return paneState{}, err
+	}
+	pane.Index, pane.PID, pane.Active, pane.Dead = index, int32(pid), active, dead
+	pane.AtTop, pane.AtBottom, pane.Height = atTop, atBottom, height
+	return pane, nil
 }
 
 func (c *commandClient) SplitPane(ctx context.Context, paneID, directory, shellCommand string) error {
@@ -577,6 +631,10 @@ func (r rawTmux) intField(ctx context.Context, target, name string, minimum, max
 	if err != nil {
 		return 0, err
 	}
+	return parseIntField(name, value, minimum, maximum)
+}
+
+func parseIntField(name, value string, minimum, maximum int) (int, error) {
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || parsed < int64(minimum) || parsed > int64(maximum) {
 		return 0, fmt.Errorf("tmux returned invalid %s %q", name, value)
@@ -589,6 +647,10 @@ func (r rawTmux) boolField(ctx context.Context, target, name string) (bool, erro
 	if err != nil {
 		return false, err
 	}
+	return parseBoolField(name, value)
+}
+
+func parseBoolField(name, value string) (bool, error) {
 	switch value {
 	case "0":
 		return false, nil

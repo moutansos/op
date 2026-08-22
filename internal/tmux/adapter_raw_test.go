@@ -132,6 +132,52 @@ func TestRawPaneFieldUsesFilteredListPanes(t *testing.T) {
 	}
 }
 
+// Per-field pane queries used to race with pane death: a pane that exited
+// between the identity listing and a later field query returned empty output,
+// and the whole snapshot failed with `tmux returned invalid pane_dead ""`.
+// One batched query keeps every pane record internally consistent.
+func TestListPanesReadsWholeWindowInSingleTmuxCall(t *testing.T) {
+	root := t.TempDir()
+	calls := filepath.Join(root, "calls")
+	arguments := filepath.Join(root, "arguments")
+	// The pane list shrinks on every call, so any follow-up query would observe
+	// a vanished pane and fail.
+	script := "#!/bin/sh\n" +
+		"printf 'x' >> '" + calls + "'\n" +
+		"if [ -s '" + arguments + "' ]; then printf '' ; exit 0; fi\n" +
+		"printf '%s\\n' \"$@\" > '" + arguments + "'\n" +
+		"printf '%%4\\t0\\t812\\t1\\t0\\t1\\t0\\t24\\tnvim\\t/home/ben/src\\n'\n" +
+		"printf '%%5\\t1\\t813\\t0\\t0\\t0\\t1\\t10\\tsh\\t/tmp\\n'\n"
+	executable := writeExecutable(t, root, "tmux-panes", script)
+	client := &commandClient{raw: rawTmux{executable: executable, socket: filepath.Join(root, "tmux.sock")}}
+
+	panes, err := client.ListPanes(context.Background(), "@6")
+	if err != nil {
+		t.Fatalf("ListPanes() error = %v", err)
+	}
+	if len(panes) != 2 || panes[0].ID != "%4" || panes[1].ID != "%5" || panes[1].CurrentPath != "/tmp" {
+		t.Fatalf("panes = %+v", panes)
+	}
+	if panes[0].PID != 812 || !panes[0].Active || panes[0].Dead || !panes[0].AtTop || panes[0].Height != 24 {
+		t.Fatalf("first pane = %+v", panes[0])
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatalf("read call log: %v", err)
+	}
+	if string(data) != "x" {
+		t.Fatalf("tmux invocations = %d, want 1", len(data))
+	}
+	data, err = os.ReadFile(arguments)
+	if err != nil {
+		t.Fatalf("read query arguments: %v", err)
+	}
+	want := strings.Join(append([]string{"-S", filepath.Join(root, "tmux.sock")}, append(paneRecordArgs("@6"), "")...), "\n")
+	if string(data) != want {
+		t.Fatalf("pane list arguments = %q, want %q", data, want)
+	}
+}
+
 func TestRawWindowFieldUsesDisplayMessage(t *testing.T) {
 	root := t.TempDir()
 	arguments := filepath.Join(root, "arguments")

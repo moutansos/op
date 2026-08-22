@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -48,6 +49,9 @@ func Validate(config Config) error {
 	}
 	if config.Stats.TmuxRefreshInterval.Duration <= 0 {
 		return invalid("stats.tmuxRefreshInterval", "must be greater than zero")
+	}
+	if err := validateAgents(config.Agents); err != nil {
+		return err
 	}
 	if err := validateServer(config.Server); err != nil {
 		return err
@@ -114,6 +118,51 @@ func validateTmuxName(field, value string) error {
 	}
 	if containsControl(value) {
 		return invalid(field, "must not contain control characters")
+	}
+	return nil
+}
+
+func validateAgents(config AgentsConfig) error {
+	if config.QuietAfter.Duration <= 0 {
+		return invalid("agents.quietAfter", "must be greater than zero")
+	}
+	if config.IdleAfter.Duration < config.QuietAfter.Duration {
+		return invalid("agents.idleAfter", "must not be shorter than agents.quietAfter")
+	}
+	if config.ScanLines <= 0 {
+		return invalid("agents.scanLines", "must be greater than zero")
+	}
+	names := make(map[string]bool, len(config.Definitions))
+	for i, definition := range config.Definitions {
+		prefix := fmt.Sprintf("agents.definitions[%d]", i)
+		name := strings.TrimSpace(definition.Name)
+		if name == "" {
+			return invalid(prefix+".name", "must not be empty")
+		}
+		if containsControl(name) {
+			return invalid(prefix+".name", "must not contain control characters")
+		}
+		key := strings.ToLower(name)
+		if names[key] {
+			return invalid(prefix+".name", "must be unique")
+		}
+		names[key] = true
+		for j, match := range definition.Match {
+			if strings.TrimSpace(match) == "" {
+				return invalid(fmt.Sprintf("%s.match[%d]", prefix, j), "must not be empty")
+			}
+		}
+		for field, patterns := range map[string][]string{
+			"busyPatterns":     definition.BusyPatterns,
+			"promptPatterns":   definition.PromptPatterns,
+			"approvalPatterns": definition.ApprovalPatterns,
+		} {
+			for j, pattern := range patterns {
+				if _, err := regexp.Compile(pattern); err != nil {
+					return invalid(fmt.Sprintf("%s.%s[%d]", prefix, field, j), "must be a valid regular expression: "+err.Error())
+				}
+			}
+		}
 	}
 	return nil
 }

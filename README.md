@@ -205,6 +205,13 @@ The canonical file is JSON:
     "refreshInterval": "2s",
     "tmuxRefreshInterval": "5s"
   },
+  "agents": {
+    "enabled": true,
+    "quietAfter": "1.2s",
+    "idleAfter": "90s",
+    "scanLines": 24,
+    "definitions": []
+  },
   "server": {
     "enabled": false,
     "listen": "127.0.0.1:8787",
@@ -275,6 +282,60 @@ systemd user unit.
 
 Unknown JSON fields currently produce warnings and are ignored. Canonical fields take precedence
 over legacy aliases.
+
+### Agent Detection
+
+The dashboard tmux tree reports whether an interactive agent in a pane is working or is blocked
+waiting on you.
+
+This cannot be answered from process state. Agents such as opencode and Claude Code multiplex
+terminal input and network sockets through a single event loop, so a process blocked on a keystroke
+and a process blocked on an API response are identical from outside: sleeping, parked in `ep_poll`,
+consuming no CPU. Detection therefore works from two observations:
+
+- **Which process owns the terminal.** `op` reads `tpgid` from `/proc/<pane-pid>/stat`, the
+  foreground process group of the pane's tty. Agents are frequently grandchildren of the pane's
+  shell, so this is more accurate than walking the pane's child tree, and it costs the same two file
+  reads no matter how large that tree is.
+- **What the agent has painted.** Pane contents are hashed each sample. A working agent repaints
+  continuously because it animates a spinner or streams tokens, so a screen that is byte-identical
+  across samples is producing nothing. Quiescence alone cannot separate "waiting at a prompt" from
+  "running a slow tool that prints nothing", so a quiet pane is only reported as blocked when a
+  recognized prompt or confirmation pattern is visible.
+
+Panes are classified as `working`, `awaiting input`, `awaiting approval`, `idle`, `starting`, or
+`unknown`. Blocked agents are counted in the Tmux panel title and named on the status line, so they
+are visible in every layout. Approval prompts also show the question that is blocking.
+
+Only panes whose foreground process matches a known agent are captured, so the number of `tmux`
+calls per refresh scales with the number of agents, not the number of panes.
+
+`agents.enabled` turns the whole feature off, including pane capture. `agents.quietAfter` is how
+long a pane must paint nothing before its screen is trusted as settled rather than as a gap between
+frames. `agents.idleAfter` is how long an unrecognized quiet pane stays quiet before it is reported
+idle instead of assumed to be mid-task. `agents.scanLines` bounds how many trailing non-empty lines
+are pattern matched.
+
+`agents.definitions` replaces the built-in profiles for `opencode`, `claude`, `codex`, `aider`,
+`gemini`, and `grok`. Each definition takes a `name`, a `match` list of command names compared
+against the pane's foreground process, and optional `busyPatterns`, `promptPatterns`, and
+`approvalPatterns` regular expressions. Pattern lists are unioned with op's generic patterns rather
+than replacing them, so a definition only needs to carry what is specific to that agent.
+
+```json
+{
+  "name": "opencode",
+  "match": ["opencode", "oc"],
+  "promptPatterns": ["(?i)ctrl\\+p\\s+commands"]
+}
+```
+
+`busyPatterns` win over quiescence, because an agent still offering "esc to interrupt" is mid-task
+by its own account. `approvalPatterns` win over everything, because a confirmation dialog blocks
+whether or not it just finished rendering.
+
+Agent detection is Linux-only. Elsewhere the pane's tmux-reported command still names the agent, but
+no foreground PID is resolved.
 
 ### Project Openers
 

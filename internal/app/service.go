@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/moutansos/op/internal/action"
+	"github.com/moutansos/op/internal/agents"
 	"github.com/moutansos/op/internal/config"
 	"github.com/moutansos/op/internal/domain"
 	gitrepo "github.com/moutansos/op/internal/git"
@@ -160,13 +161,42 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Service, err
 	}, func(callCtx context.Context) (domain.TmuxSnapshot, error) {
 		return tmuxmanager.ReadSnapshot(callCtx, tmuxConfig)
 	})
+	statsOptions, err := agentStatsOptions(cfg, tmuxConfig)
+	if err != nil {
+		return nil, typed(ctx, op, domain.ErrorCodeConfig, "configure agent detection", err)
+	}
 	return NewWithDependencies(cfg, Dependencies{
 		Catalog:    catalog,
 		Repository: gitrepo.NewRepository(),
 		Launcher:   launcher,
 		Tmux:       tmux,
-		Stats:      stats.NewCollector(),
+		Stats:      stats.NewCollector(statsOptions),
 	}, options)
+}
+
+// agentStatsOptions builds the agent-detection half of the stats collector.
+//
+// A missing tmux binary disables detection rather than failing construction:
+// every other op command already degrades gracefully without tmux, and agent
+// classification is an enhancement to the dashboard, not a prerequisite for it.
+func agentStatsOptions(cfg config.Config, tmuxConfig tmuxmanager.ManagerConfig) (stats.Options, error) {
+	if !cfg.Agents.Enabled {
+		return stats.Options{}, nil
+	}
+	detector, err := agents.New(agents.Options{
+		Definitions: cfg.AgentDefinitions(),
+		QuietAfter:  cfg.Agents.QuietAfter.Duration,
+		IdleAfter:   cfg.Agents.IdleAfter.Duration,
+		ScanLines:   cfg.Agents.ScanLines,
+	})
+	if err != nil {
+		return stats.Options{}, err
+	}
+	capturer, err := tmuxmanager.NewPaneCapturer(tmuxConfig)
+	if err != nil {
+		return stats.Options{}, nil
+	}
+	return stats.Options{Detector: detector, Capturer: capturer}, nil
 }
 
 // NewWithDependencies constructs a service from narrow adapters, primarily for

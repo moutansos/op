@@ -13,6 +13,7 @@ type rawConfig struct {
 	PreferredShell *string           `json:"preferredShell"`
 	Tmux           *rawTmuxConfig    `json:"tmux"`
 	Stats          *rawStatsConfig   `json:"stats"`
+	Agents         *rawAgentsConfig  `json:"agents"`
 	Server         *rawServerConfig  `json:"server"`
 	Actions        *rawActionsConfig `json:"actions"`
 	ProjectOpeners *[]ProjectOpener  `json:"projectOpeners"`
@@ -35,6 +36,14 @@ type rawTmuxConfig struct {
 type rawStatsConfig struct {
 	RefreshInterval     *Duration `json:"refreshInterval"`
 	TmuxRefreshInterval *Duration `json:"tmuxRefreshInterval"`
+}
+
+type rawAgentsConfig struct {
+	Enabled     *bool              `json:"enabled"`
+	QuietAfter  *Duration          `json:"quietAfter"`
+	IdleAfter   *Duration          `json:"idleAfter"`
+	ScanLines   *int               `json:"scanLines"`
+	Definitions *[]AgentDefinition `json:"definitions"`
 }
 
 type rawServerConfig struct {
@@ -91,6 +100,7 @@ func Migrate(data []byte) (Config, []Warning, error) {
 
 	applyTmux(&config.Tmux, raw.Tmux)
 	applyStats(&config.Stats, raw.Stats)
+	applyAgents(&config.Agents, raw.Agents)
 	applyServer(&config.Server, raw.Server)
 	applyActions(&config.Actions, raw.Actions)
 	if raw.ProjectOpeners != nil {
@@ -168,6 +178,30 @@ func applyStats(target *StatsConfig, raw *rawStatsConfig) {
 	}
 }
 
+func applyAgents(target *AgentsConfig, raw *rawAgentsConfig) {
+	if raw == nil {
+		return
+	}
+	if raw.Enabled != nil {
+		target.Enabled = *raw.Enabled
+	}
+	if raw.QuietAfter != nil {
+		target.QuietAfter = *raw.QuietAfter
+	}
+	if raw.IdleAfter != nil {
+		target.IdleAfter = *raw.IdleAfter
+	}
+	if raw.ScanLines != nil {
+		target.ScanLines = *raw.ScanLines
+	}
+	if raw.Definitions != nil {
+		target.Definitions = *raw.Definitions
+		if target.Definitions == nil {
+			target.Definitions = make([]AgentDefinition, 0)
+		}
+	}
+}
+
 func applyServer(target *ServerConfig, raw *rawServerConfig) {
 	if raw == nil {
 		return
@@ -197,15 +231,35 @@ func applyActions(target *ActionsConfig, raw *rawActionsConfig) {
 
 func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	var warnings []Warning
-	collectUnknown(root, "", set("repoDirectory", "preferredShell", "tmux", "stats", "server", "actions", "projectOpeners", "customEntries", "customCommands", "preferedShell", "wslRepoDirectory", "isServer"), &warnings)
+	collectUnknown(root, "", set("repoDirectory", "preferredShell", "tmux", "stats", "agents", "server", "actions", "projectOpeners", "customEntries", "customCommands", "preferedShell", "wslRepoDirectory", "isServer"), &warnings)
 	collectObjectUnknown(root["tmux"], "tmux", set("session", "dashboardWindow", "socket", "shellPaneRows", "defaultProfile"), &warnings)
 	collectObjectUnknown(root["stats"], "stats", set("refreshInterval", "tmuxRefreshInterval"), &warnings)
+	collectObjectUnknown(root["agents"], "agents", set("enabled", "quietAfter", "idleAfter", "scanLines", "definitions"), &warnings)
+	collectAgentDefinitionUnknown(root["agents"], &warnings)
 	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "tokenFile", "tlsCertFile", "tlsKeyFile"), &warnings)
 	collectObjectUnknown(root["actions"], "actions", set("guiEditors"), &warnings)
 	collectArrayUnknown(root["projectOpeners"], "projectOpeners", set("id", "name", "mode", "command", "runInPreferredShell"), "", nil, &warnings)
 	collectArrayUnknown(root["customEntries"], "customEntries", set("name", "paths"), "paths", set("win", "linux"), &warnings)
 	collectArrayUnknown(root["customCommands"], "customCommands", set("name", "command", "runInPreferredShell", "global"), "", nil, &warnings)
 	return warnings
+}
+
+// collectAgentDefinitionUnknown reaches one level into the agents object because
+// its definitions are nested rather than living at the configuration root.
+func collectAgentDefinitionUnknown(data json.RawMessage, warnings *[]Warning) {
+	if len(data) == 0 || string(data) == "null" {
+		return
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(data, &object) != nil {
+		return
+	}
+	collectArrayUnknown(
+		object["definitions"],
+		"agents.definitions",
+		set("name", "match", "busyPatterns", "promptPatterns", "approvalPatterns"),
+		"", nil, warnings,
+	)
 }
 
 func collectObjectUnknown(data json.RawMessage, path string, allowed map[string]bool, warnings *[]Warning) {

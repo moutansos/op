@@ -62,7 +62,9 @@ func (m Model) wideView() string {
 	rightWidth := m.width - leftWidth - 1
 	contentHeight := m.height - 1
 	projectHeight := contentHeight - 5
-	statsHeight := max(8, (contentHeight*2)/3)
+	// The tmux tree carries agent state and grows with the number of panes, so
+	// it takes the larger share and the fixed-size host metrics take the rest.
+	statsHeight := max(8, contentHeight/3)
 	tmuxHeight := contentHeight - statsHeight
 
 	left := lipgloss.JoinVertical(lipgloss.Left,
@@ -79,7 +81,7 @@ func (m Model) wideView() string {
 func (m Model) stackedView() string {
 	projectHeight := max(7, m.height/2)
 	remaining := m.height - projectHeight - 5
-	tmuxHeight := max(4, remaining/3)
+	tmuxHeight := max(6, (remaining*3)/5)
 	statsHeight := remaining - tmuxHeight
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.projectPanel(m.width, projectHeight),
@@ -140,6 +142,9 @@ func (m Model) statsPanel(width, height int) string {
 
 func (m Model) tmuxPanel(width, height int) string {
 	title := "Tmux"
+	if waiting := m.agentsNeedingAttention(); waiting > 0 {
+		title += fmt.Sprintf("  %d agent%s waiting", waiting, plural(waiting))
+	}
 	if m.tmuxRefreshing {
 		title += "  refreshing"
 	}
@@ -163,6 +168,12 @@ func (m Model) statusPanel(width, height int) string {
 	}
 	if m.statusErr {
 		status = errorStyle.Render(status)
+	}
+	// Agent attention is surfaced here as well as in the tree because the tmux
+	// panel is hidden in the tabbed layout, and a blocked agent is exactly the
+	// thing the operator should not have to go looking for.
+	if waiting := m.waitingAgentSummary(); waiting != "" {
+		status += "   " + waitingStyle.Render(waiting)
 	}
 	help := dimStyle.Render("enter default   a open with   w worktree   / filter   n new   c clone   r refresh   q quit")
 	return renderPanel("Actions / Status", status+"\n"+help, width, height, false, nil)
@@ -212,33 +223,6 @@ func formatProcessCPU(process domain.PaneProcessStats) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.1f%%", process.CPUPercent)
-}
-
-func (m Model) renderTmux(_ int, height int) string {
-	if m.tmux.Session == nil {
-		return "Managed session is not running"
-	}
-	session := m.tmux.Session
-	attached := "detached"
-	if session.Attached {
-		attached = "attached"
-	}
-	lines := []string{fmt.Sprintf("%s  %s  %d windows", session.Name, attached, len(session.Windows))}
-	for _, window := range session.Windows {
-		marker := " "
-		if window.Active {
-			marker = ">"
-		}
-		lines = append(lines, fmt.Sprintf("%s %d:%s  %s  %d panes", marker, window.Index, window.Name, window.Profile, len(window.Panes)))
-		for _, pane := range window.Panes {
-			state := pane.CurrentCommand
-			if pane.Dead {
-				state += " [dead]"
-			}
-			lines = append(lines, dimStyle.Render(fmt.Sprintf("    %s pid %-6d %s", pane.ID, pane.PID, state)))
-		}
-	}
-	return limitLines(lines, height)
 }
 
 func (m Model) overlayView(_ string) string {

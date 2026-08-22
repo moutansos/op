@@ -30,12 +30,14 @@ func TestCollectorAggregatesProcessTreeAndCPUDeltas(t *testing.T) {
 		t.Fatalf("first Collect() error = %v", err)
 	}
 	assertSingleProcess(t, first, domain.PaneProcessStats{
-		WindowName:    "project",
-		PaneID:        "%1",
-		RootPID:       100,
-		Command:       "nvim",
-		ResidentBytes: 100,
-		UptimeSeconds: 10,
+		WindowName:        "project",
+		PaneID:            "%1",
+		RootPID:           100,
+		Command:           "nvim",
+		ResidentBytes:     100,
+		UptimeSeconds:     10,
+		ProcessCount:      4,
+		ForegroundCommand: "nvim",
 	})
 	if first.Processes[0].CPUAvailable {
 		t.Fatal("first process CPU sample should be unavailable")
@@ -50,14 +52,16 @@ func TestCollectorAggregatesProcessTreeAndCPUDeltas(t *testing.T) {
 		t.Fatalf("second Collect() error = %v", err)
 	}
 	want := domain.PaneProcessStats{
-		WindowName:    "project",
-		PaneID:        "%1",
-		RootPID:       100,
-		Command:       "nvim",
-		CPUPercent:    100,
-		CPUAvailable:  true,
-		ResidentBytes: 100,
-		UptimeSeconds: 12,
+		WindowName:        "project",
+		PaneID:            "%1",
+		RootPID:           100,
+		Command:           "nvim",
+		CPUPercent:        100,
+		CPUAvailable:      true,
+		ResidentBytes:     100,
+		UptimeSeconds:     12,
+		ProcessCount:      4,
+		ForegroundCommand: "nvim",
 	}
 	assertSingleProcess(t, second, want)
 	if grandchild.timesCalls != 2 {

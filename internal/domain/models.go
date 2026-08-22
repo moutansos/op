@@ -146,6 +146,78 @@ type StatsSnapshot struct {
 	CapturedAt time.Time          `json:"capturedAt"`
 	Host       HostStats          `json:"host"`
 	Processes  []PaneProcessStats `json:"processes"`
+	Agents     []PaneAgentState   `json:"agents,omitempty"`
+}
+
+// AgentActivity describes what an interactive agent running in a pane is doing.
+// Classification is observational: it is derived from the pane's foreground
+// process and the bytes the agent has painted on its terminal, because agents
+// that multiplex stdin and network sockets in one event loop are
+// indistinguishable at the kernel level whether they block on a human or on an
+// API response.
+type AgentActivity string
+
+const (
+	// AgentActivityUnknown means the pane could not be classified, usually
+	// because the foreground process or the pane contents were unreadable.
+	AgentActivityUnknown AgentActivity = "unknown"
+	// AgentActivityStarting means the agent was observed too recently to have
+	// a quiescence baseline yet.
+	AgentActivityStarting AgentActivity = "starting"
+	// AgentActivityWorking means the agent is painting new output.
+	AgentActivityWorking AgentActivity = "working"
+	// AgentActivityAwaitingInput means the agent has gone quiet on a prompt and
+	// is waiting for the operator to type something.
+	AgentActivityAwaitingInput AgentActivity = "awaiting_input"
+	// AgentActivityAwaitingApproval means the agent is blocked on an explicit
+	// confirmation dialog, such as a tool-use or permission request.
+	AgentActivityAwaitingApproval AgentActivity = "awaiting_approval"
+	// AgentActivityIdle means the agent has been quiet long enough that it is
+	// unlikely to be mid-task, but no prompt was recognized.
+	AgentActivityIdle AgentActivity = "idle"
+)
+
+// NeedsAttention reports whether the activity represents an agent that has
+// stopped making progress and is blocked on the operator.
+func (a AgentActivity) NeedsAttention() bool {
+	return a == AgentActivityAwaitingInput || a == AgentActivityAwaitingApproval
+}
+
+// String renders the activity for display.
+func (a AgentActivity) String() string {
+	switch a {
+	case AgentActivityStarting:
+		return "starting"
+	case AgentActivityWorking:
+		return "working"
+	case AgentActivityAwaitingInput:
+		return "awaiting input"
+	case AgentActivityAwaitingApproval:
+		return "awaiting approval"
+	case AgentActivityIdle:
+		return "idle"
+	default:
+		return "unknown"
+	}
+}
+
+// PaneAgentState is the classification of a single agent-bearing pane.
+type PaneAgentState struct {
+	PaneID     string `json:"paneId"`
+	WindowName string `json:"windowName"`
+	// AgentName is the configured definition name that matched the pane.
+	AgentName string `json:"agentName"`
+	// ForegroundPID is the leader of the terminal's foreground process group,
+	// which is the process actually able to read from the pane.
+	ForegroundPID     int32         `json:"foregroundPid,omitempty"`
+	ForegroundCommand string        `json:"foregroundCommand,omitempty"`
+	Activity          AgentActivity `json:"activity"`
+	// Detail is the recognized prompt line that drove the classification.
+	Detail string `json:"detail,omitempty"`
+	// QuietSeconds is how long the pane has painted no new output.
+	QuietSeconds uint64 `json:"quietSeconds"`
+	// ChangedAt is when the pane last painted new output.
+	ChangedAt time.Time `json:"changedAt"`
 }
 
 type HostStats struct {
@@ -166,6 +238,13 @@ type PaneProcessStats struct {
 	ResidentBytes uint64  `json:"residentBytes"`
 	UptimeSeconds uint64  `json:"uptimeSeconds"`
 	Dead          bool    `json:"dead"`
+	// ProcessCount is the number of live processes in the pane's tree.
+	ProcessCount int `json:"processCount,omitempty"`
+	// ForegroundPID is the leader of the pane terminal's foreground process
+	// group. It is the process that owns the pane's input, which is not
+	// necessarily a direct child of the pane's root shell.
+	ForegroundPID     int32  `json:"foregroundPid,omitempty"`
+	ForegroundCommand string `json:"foregroundCommand,omitempty"`
 }
 
 type JobStatus string

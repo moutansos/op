@@ -12,6 +12,25 @@
     "refreshInterval": "2s",
     "tmuxRefreshInterval": "5s"
   },
+  "agents": {
+    "enabled": true,
+    "quietAfter": "1.2s",
+    "idleAfter": "90s",
+    "scanLines": 24,
+    "definitions": [
+      {
+        "name": "opencode",
+        "match": ["opencode", "oc", "oca"],
+        "promptPatterns": ["(?i)ctrl\\+p\\s+commands"]
+      },
+      {
+        "name": "claude",
+        "match": ["claude"],
+        "promptPatterns": ["(?i)shift\\+tab\\s+to\\s+cycle"],
+        "approvalPatterns": ["(?i)\\bdo you want to proceed\\b"]
+      }
+    ]
+  },
   "server": {
     "enabled": false,
     "listen": "127.0.0.1:8787",

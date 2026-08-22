@@ -421,3 +421,90 @@ func mapLookup(values map[string]string) func(string) (string, bool) {
 		return value, ok
 	}
 }
+
+func TestDefaultsEnableAgentDetectionWithBuiltinProfiles(t *testing.T) {
+	config := Defaults()
+	if !config.Agents.Enabled {
+		t.Fatal("agent detection should be enabled by default")
+	}
+	if len(config.Agents.Definitions) != 0 {
+		t.Fatalf("defaults should carry no explicit definitions, got %d", len(config.Agents.Definitions))
+	}
+	definitions := config.AgentDefinitions()
+	if len(definitions) == 0 {
+		t.Fatal("AgentDefinitions() should fall back to the built-in profiles")
+	}
+	found := false
+	for _, definition := range definitions {
+		if definition.Name == "opencode" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("built-in profiles are missing opencode: %+v", definitions)
+	}
+}
+
+func TestAgentDefinitionsReplaceBuiltinsWhenConfigured(t *testing.T) {
+	config := Defaults()
+	config.Agents.Definitions = []AgentDefinition{{Name: "mine", Match: []string{"mine"}}}
+	definitions := config.AgentDefinitions()
+	if len(definitions) != 1 || definitions[0].Name != "mine" {
+		t.Fatalf("AgentDefinitions() = %+v, want only the configured profile", definitions)
+	}
+}
+
+func TestMigrateReadsAgentsBlock(t *testing.T) {
+	data := `{"agents":{"enabled":false,"quietAfter":"3s","idleAfter":"2m","scanLines":8,
+		"definitions":[{"name":"mine","match":["mine"],"busyPatterns":["working"]}]}}`
+	config, warnings, err := Migrate([]byte(data))
+	if err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warningPaths(warnings))
+	}
+	if config.Agents.Enabled {
+		t.Fatal("agents.enabled was not applied")
+	}
+	if config.Agents.QuietAfter.Duration != 3*time.Second || config.Agents.IdleAfter.Duration != 2*time.Minute {
+		t.Fatalf("agent durations = %v / %v", config.Agents.QuietAfter, config.Agents.IdleAfter)
+	}
+	if config.Agents.ScanLines != 8 {
+		t.Fatalf("agents.scanLines = %d, want 8", config.Agents.ScanLines)
+	}
+	if len(config.Agents.Definitions) != 1 || config.Agents.Definitions[0].BusyPatterns[0] != "working" {
+		t.Fatalf("agent definitions = %+v", config.Agents.Definitions)
+	}
+}
+
+func TestMigrateWarnsOnUnknownAgentFields(t *testing.T) {
+	data := `{"agents":{"enabled":true,"mystery":1,"definitions":[{"name":"a","surprise":2}]}}`
+	_, warnings, err := Migrate([]byte(data))
+	if err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	want := []string{"agents.definitions[0].surprise", "agents.mystery"}
+	if got := warningPaths(warnings); !reflect.DeepEqual(got, want) {
+		t.Fatalf("warning paths = %v, want %v", got, want)
+	}
+}
+
+func TestValidateRejectsBadAgentConfiguration(t *testing.T) {
+	for name, mutate := range map[string]func(*Config){
+		"zero quietAfter":     func(c *Config) { c.Agents.QuietAfter = NewDuration(0) },
+		"idle before quiet":   func(c *Config) { c.Agents.IdleAfter = NewDuration(time.Millisecond) },
+		"zero scanLines":      func(c *Config) { c.Agents.ScanLines = 0 },
+		"empty name":          func(c *Config) { c.Agents.Definitions = []AgentDefinition{{Name: " "}} },
+		"duplicate name":      func(c *Config) { c.Agents.Definitions = []AgentDefinition{{Name: "a"}, {Name: "A"}} },
+		"empty match entry":   func(c *Config) { c.Agents.Definitions = []AgentDefinition{{Name: "a", Match: []string{""}}} },
+		"invalid regexp":      func(c *Config) { c.Agents.Definitions = []AgentDefinition{{Name: "a", PromptPatterns: []string{"("}}} },
+		"invalid busy regexp": func(c *Config) { c.Agents.Definitions = []AgentDefinition{{Name: "a", BusyPatterns: []string{"["}}} },
+	} {
+		config := validConfig(t)
+		mutate(&config)
+		if err := Validate(config); err == nil || !domain.IsCode(err, domain.ErrorCodeConfig) {
+			t.Fatalf("Validate() with %s error = %v, want a config error", name, err)
+		}
+	}
+}

@@ -5,16 +5,37 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/moutansos/op/internal/agents"
 	"github.com/moutansos/op/internal/domain"
 )
 
 const FileName = "config.json"
+
+// AgentDefinitions converts the configured agent profiles into detector
+// definitions, falling back to op's built-in profiles when none are configured.
+func (c Config) AgentDefinitions() []agents.Definition {
+	if len(c.Agents.Definitions) == 0 {
+		return agents.Builtins()
+	}
+	definitions := make([]agents.Definition, 0, len(c.Agents.Definitions))
+	for _, definition := range c.Agents.Definitions {
+		definitions = append(definitions, agents.Definition{
+			Name:             definition.Name,
+			Match:            definition.Match,
+			BusyPatterns:     definition.BusyPatterns,
+			PromptPatterns:   definition.PromptPatterns,
+			ApprovalPatterns: definition.ApprovalPatterns,
+		})
+	}
+	return definitions
+}
 
 type Config struct {
 	RepoDirectory  string          `json:"repoDirectory"`
 	PreferredShell string          `json:"preferredShell"`
 	Tmux           TmuxConfig      `json:"tmux"`
 	Stats          StatsConfig     `json:"stats"`
+	Agents         AgentsConfig    `json:"agents"`
 	Server         ServerConfig    `json:"server"`
 	Actions        ActionsConfig   `json:"actions"`
 	ProjectOpeners []ProjectOpener `json:"projectOpeners"`
@@ -36,6 +57,43 @@ type TmuxConfig struct {
 type StatsConfig struct {
 	RefreshInterval     Duration `json:"refreshInterval"`
 	TmuxRefreshInterval Duration `json:"tmuxRefreshInterval"`
+}
+
+// AgentsConfig controls detection of interactive agents running in tmux panes.
+//
+// Detection reads pane contents, so it is a privacy-relevant capability and can
+// be switched off wholesale.
+type AgentsConfig struct {
+	Enabled bool `json:"enabled"`
+	// QuietAfter is how long a pane must paint nothing before its screen is
+	// treated as settled rather than as a gap between frames. It should stay
+	// below stats.refreshInterval's useful resolution.
+	QuietAfter Duration `json:"quietAfter"`
+	// IdleAfter is how long an unrecognized quiet pane stays quiet before it is
+	// reported idle instead of assumed to be running a silent task.
+	IdleAfter Duration `json:"idleAfter"`
+	// ScanLines is how many trailing non-empty lines are pattern matched.
+	ScanLines int `json:"scanLines"`
+	// Definitions replaces the built-in agent profiles when non-empty.
+	Definitions []AgentDefinition `json:"definitions"`
+}
+
+// AgentDefinition teaches op to recognize one agent. Pattern lists are unioned
+// with op's generic patterns rather than replacing them.
+type AgentDefinition struct {
+	Name string `json:"name"`
+	// Match holds command names compared case-insensitively against the pane's
+	// foreground process.
+	Match []string `json:"match"`
+	// BusyPatterns are regular expressions that only appear while the agent is
+	// mid-task, such as an "esc to interrupt" affordance.
+	BusyPatterns []string `json:"busyPatterns,omitempty"`
+	// PromptPatterns are regular expressions that appear when the agent is
+	// offering an input line.
+	PromptPatterns []string `json:"promptPatterns,omitempty"`
+	// ApprovalPatterns are regular expressions that appear when the agent is
+	// blocked on an explicit confirmation.
+	ApprovalPatterns []string `json:"approvalPatterns,omitempty"`
 }
 
 type ServerConfig struct {
@@ -110,6 +168,13 @@ func Defaults() Config {
 		Stats: StatsConfig{
 			RefreshInterval:     NewDuration(2 * time.Second),
 			TmuxRefreshInterval: NewDuration(5 * time.Second),
+		},
+		Agents: AgentsConfig{
+			Enabled:     true,
+			QuietAfter:  NewDuration(agents.DefaultQuietAfter),
+			IdleAfter:   NewDuration(agents.DefaultIdleAfter),
+			ScanLines:   agents.DefaultScanLines,
+			Definitions: make([]AgentDefinition, 0),
 		},
 		Server: ServerConfig{
 			Listen:    "127.0.0.1:8787",
