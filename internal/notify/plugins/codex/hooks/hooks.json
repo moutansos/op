@@ -1,0 +1,29 @@
+{
+  "description": "Forward Codex CLI Stop and PermissionRequest events to oc-notifier. Classification happens server-side in mapCodexHook. Prefer install-codex-plugin (writes absolute paths into ~/.codex/hooks.json). PLUGIN_ROOT is set when this file is loaded as plugin-bundled hooks.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/scripts/forward.sh\"",
+            "timeout": 15,
+            "statusMessage": "oc-notifier"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/scripts/forward.sh\"",
+            "timeout": 15,
+            "statusMessage": "oc-notifier"
+          }
+        ]
+      }
+    ]
+  }
+}

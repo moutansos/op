@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -51,6 +52,9 @@ func Validate(config Config) error {
 		return invalid("stats.tmuxRefreshInterval", "must be greater than zero")
 	}
 	if err := validateAgents(config.Agents); err != nil {
+		return err
+	}
+	if err := validateNotifications(config.Notifications); err != nil {
 		return err
 	}
 	if err := validateServer(config.Server); err != nil {
@@ -163,6 +167,97 @@ func validateAgents(config AgentsConfig) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateNotifications(config NotificationsConfig) error {
+	if !config.Enabled {
+		return nil
+	}
+	if config.Debounce.Duration < 0 {
+		return invalid("notifications.debounce", "must not be negative")
+	}
+	for i, directory := range config.IgnoreDirectories {
+		if err := requireAbsolutePath(fmt.Sprintf("notifications.ignoreDirectories[%d]", i), directory); err != nil {
+			return err
+		}
+	}
+	hasOpenCode := strings.TrimSpace(config.OpenCode.BaseURL) != ""
+	if !hasOpenCode && !config.Ingest.Enabled {
+		return invalid("notifications", "must enable ingest or set notifications.opencode.baseUrl")
+	}
+	if hasOpenCode {
+		if err := requireHTTPURL("notifications.opencode.baseUrl", config.OpenCode.BaseURL); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(config.OpenCode.DesktopBaseURL) != "" {
+		if err := requireHTTPURL("notifications.opencode.desktopBaseUrl", config.OpenCode.DesktopBaseURL); err != nil {
+			return err
+		}
+	}
+	hasUser := strings.TrimSpace(config.OpenCode.Username) != ""
+	hasPassword := config.OpenCode.Password != ""
+	if hasUser != hasPassword {
+		return invalid("notifications.opencode", "username and password must be configured together")
+	}
+	for i, provider := range config.Providers {
+		if err := validateNotificationProvider(fmt.Sprintf("notifications.providers[%d]", i), provider); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateNotificationProvider(prefix string, provider NotificationProviderConfig) error {
+	if strings.TrimSpace(provider.Type) == "" {
+		return invalid(prefix+".type", "must not be empty")
+	}
+	switch provider.Type {
+	case "discord", "msteams", "webhook", "parent":
+	default:
+		return invalid(prefix+".type", "must be discord, msteams, webhook, or parent")
+	}
+	if !provider.Enabled {
+		return nil
+	}
+	switch provider.Type {
+	case "discord", "msteams":
+		return requireHTTPURL(prefix+".webhookUrl", provider.WebhookURL)
+	case "webhook":
+		if err := requireHTTPURL(prefix+".url", provider.URL); err != nil {
+			return err
+		}
+		method := strings.ToUpper(strings.TrimSpace(provider.Method))
+		if method != "" && method != "GET" && method != "POST" && method != "PUT" {
+			return invalid(prefix+".method", "must be GET, POST, or PUT")
+		}
+	case "parent":
+		if err := requireHTTPURL(prefix+".url", provider.URL); err != nil {
+			return err
+		}
+		if provider.MaxHops < 0 {
+			return invalid(prefix+".maxHops", "must not be negative")
+		}
+		if provider.Timeout.Duration < 0 {
+			return invalid(prefix+".timeout", "must not be negative")
+		}
+	}
+	return nil
+}
+
+func requireHTTPURL(field, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return invalid(field, "must not be empty")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return invalid(field, "must be a valid http or https URL")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return invalid(field, "must be a valid http or https URL")
 	}
 	return nil
 }

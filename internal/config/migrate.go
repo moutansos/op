@@ -9,16 +9,17 @@ import (
 )
 
 type rawConfig struct {
-	RepoDirectory  *string           `json:"repoDirectory"`
-	PreferredShell *string           `json:"preferredShell"`
-	Tmux           *rawTmuxConfig    `json:"tmux"`
-	Stats          *rawStatsConfig   `json:"stats"`
-	Agents         *rawAgentsConfig  `json:"agents"`
-	Server         *rawServerConfig  `json:"server"`
-	Actions        *rawActionsConfig `json:"actions"`
-	ProjectOpeners *[]ProjectOpener  `json:"projectOpeners"`
-	CustomEntries  *[]CustomEntry    `json:"customEntries"`
-	CustomCommands *[]CustomCommand  `json:"customCommands"`
+	RepoDirectory  *string                 `json:"repoDirectory"`
+	PreferredShell *string                 `json:"preferredShell"`
+	Tmux           *rawTmuxConfig          `json:"tmux"`
+	Stats          *rawStatsConfig         `json:"stats"`
+	Agents         *rawAgentsConfig        `json:"agents"`
+	Notifications  *rawNotificationsConfig `json:"notifications"`
+	Server         *rawServerConfig        `json:"server"`
+	Actions        *rawActionsConfig       `json:"actions"`
+	ProjectOpeners *[]ProjectOpener        `json:"projectOpeners"`
+	CustomEntries  *[]CustomEntry          `json:"customEntries"`
+	CustomCommands *[]CustomCommand        `json:"customCommands"`
 
 	PreferredShellLegacy *string `json:"preferedShell"`
 	WSLRepoDirectory     *string `json:"wslRepoDirectory"`
@@ -44,6 +45,26 @@ type rawAgentsConfig struct {
 	IdleAfter   *Duration          `json:"idleAfter"`
 	ScanLines   *int               `json:"scanLines"`
 	Definitions *[]AgentDefinition `json:"definitions"`
+}
+
+type rawNotificationsConfig struct {
+	Enabled           *bool                           `json:"enabled"`
+	Debounce          *Duration                       `json:"debounce"`
+	IgnoreDirectories *[]string                       `json:"ignoreDirectories"`
+	OpenCode          *rawNotificationsOpenCodeConfig `json:"opencode"`
+	Ingest            *rawNotificationsIngestConfig   `json:"ingest"`
+	Providers         *[]NotificationProviderConfig   `json:"providers"`
+}
+
+type rawNotificationsOpenCodeConfig struct {
+	BaseURL        *string `json:"baseUrl"`
+	DesktopBaseURL *string `json:"desktopBaseUrl"`
+	Username       *string `json:"username"`
+	Password       *string `json:"password"`
+}
+
+type rawNotificationsIngestConfig struct {
+	Enabled *bool `json:"enabled"`
 }
 
 type rawServerConfig struct {
@@ -101,6 +122,7 @@ func Migrate(data []byte) (Config, []Warning, error) {
 	applyTmux(&config.Tmux, raw.Tmux)
 	applyStats(&config.Stats, raw.Stats)
 	applyAgents(&config.Agents, raw.Agents)
+	applyNotifications(&config.Notifications, raw.Notifications)
 	applyServer(&config.Server, raw.Server)
 	applyActions(&config.Actions, raw.Actions)
 	if raw.ProjectOpeners != nil {
@@ -202,6 +224,47 @@ func applyAgents(target *AgentsConfig, raw *rawAgentsConfig) {
 	}
 }
 
+func applyNotifications(target *NotificationsConfig, raw *rawNotificationsConfig) {
+	if raw == nil {
+		return
+	}
+	if raw.Enabled != nil {
+		target.Enabled = *raw.Enabled
+	}
+	if raw.Debounce != nil {
+		target.Debounce = *raw.Debounce
+	}
+	if raw.IgnoreDirectories != nil {
+		target.IgnoreDirectories = *raw.IgnoreDirectories
+		if target.IgnoreDirectories == nil {
+			target.IgnoreDirectories = make([]string, 0)
+		}
+	}
+	if raw.OpenCode != nil {
+		if raw.OpenCode.BaseURL != nil {
+			target.OpenCode.BaseURL = *raw.OpenCode.BaseURL
+		}
+		if raw.OpenCode.DesktopBaseURL != nil {
+			target.OpenCode.DesktopBaseURL = *raw.OpenCode.DesktopBaseURL
+		}
+		if raw.OpenCode.Username != nil {
+			target.OpenCode.Username = *raw.OpenCode.Username
+		}
+		if raw.OpenCode.Password != nil {
+			target.OpenCode.Password = *raw.OpenCode.Password
+		}
+	}
+	if raw.Ingest != nil && raw.Ingest.Enabled != nil {
+		target.Ingest.Enabled = *raw.Ingest.Enabled
+	}
+	if raw.Providers != nil {
+		target.Providers = *raw.Providers
+		if target.Providers == nil {
+			target.Providers = make([]NotificationProviderConfig, 0)
+		}
+	}
+}
+
 func applyServer(target *ServerConfig, raw *rawServerConfig) {
 	if raw == nil {
 		return
@@ -231,11 +294,15 @@ func applyActions(target *ActionsConfig, raw *rawActionsConfig) {
 
 func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	var warnings []Warning
-	collectUnknown(root, "", set("repoDirectory", "preferredShell", "tmux", "stats", "agents", "server", "actions", "projectOpeners", "customEntries", "customCommands", "preferedShell", "wslRepoDirectory", "isServer"), &warnings)
+	collectUnknown(root, "", set("repoDirectory", "preferredShell", "tmux", "stats", "agents", "notifications", "server", "actions", "projectOpeners", "customEntries", "customCommands", "preferedShell", "wslRepoDirectory", "isServer"), &warnings)
 	collectObjectUnknown(root["tmux"], "tmux", set("session", "dashboardWindow", "socket", "shellPaneRows", "defaultProfile"), &warnings)
 	collectObjectUnknown(root["stats"], "stats", set("refreshInterval", "tmuxRefreshInterval"), &warnings)
 	collectObjectUnknown(root["agents"], "agents", set("enabled", "quietAfter", "idleAfter", "scanLines", "definitions"), &warnings)
 	collectAgentDefinitionUnknown(root["agents"], &warnings)
+	collectObjectUnknown(root["notifications"], "notifications", set("enabled", "debounce", "ignoreDirectories", "opencode", "ingest", "providers"), &warnings)
+	collectObjectUnknown(notificationsObject(root["notifications"])["opencode"], "notifications.opencode", set("baseUrl", "desktopBaseUrl", "username", "password"), &warnings)
+	collectObjectUnknown(notificationsObject(root["notifications"])["ingest"], "notifications.ingest", set("enabled"), &warnings)
+	collectArrayUnknown(notificationsObject(root["notifications"])["providers"], "notifications.providers", set("type", "enabled", "webhookUrl", "url", "method", "headers", "token", "maxHops", "timeout"), "", nil, &warnings)
 	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "tokenFile", "tlsCertFile", "tlsKeyFile"), &warnings)
 	collectObjectUnknown(root["actions"], "actions", set("guiEditors"), &warnings)
 	collectArrayUnknown(root["projectOpeners"], "projectOpeners", set("id", "name", "mode", "command", "runInPreferredShell"), "", nil, &warnings)
@@ -260,6 +327,17 @@ func collectAgentDefinitionUnknown(data json.RawMessage, warnings *[]Warning) {
 		set("name", "match", "busyPatterns", "promptPatterns", "approvalPatterns"),
 		"", nil, warnings,
 	)
+}
+
+func notificationsObject(data json.RawMessage) map[string]json.RawMessage {
+	if len(data) == 0 || string(data) == "null" {
+		return map[string]json.RawMessage{}
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(data, &object) != nil || object == nil {
+		return map[string]json.RawMessage{}
+	}
+	return object
 }
 
 func collectObjectUnknown(data json.RawMessage, path string, allowed map[string]bool, warnings *[]Warning) {

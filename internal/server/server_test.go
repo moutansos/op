@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/moutansos/op/internal/domain"
+	"github.com/moutansos/op/internal/notify"
 )
 
 const testToken = "correct-horse-battery-staple"
@@ -62,6 +63,10 @@ func (f *fakeService) OpenProject(ctx context.Context, request domain.OpenProjec
 		return f.openProject(ctx, request)
 	}
 	return domain.OpenProjectResult{}, nil
+}
+
+func (f *fakeService) SelectPane(context.Context, domain.SelectPaneRequest) (domain.SelectPaneResult, error) {
+	return domain.SelectPaneResult{}, nil
 }
 
 func (f *fakeService) RunProjectAction(context.Context, domain.RunProjectActionRequest) (domain.RunProjectActionResult, error) {
@@ -640,4 +645,32 @@ func waitForJobStatus(t *testing.T, handler http.Handler, id string, wanted doma
 	}
 	t.Fatalf("timed out waiting for job %s to reach %s", id, wanted)
 	return domain.Job{}
+}
+
+func TestNotifyIngestRoutesRequireAuthAndAcceptHooks(t *testing.T) {
+	var sent []notify.Notification
+	ingest := notify.NewIngest(notifySenderFunc(func(n notify.Notification) {
+		sent = append(sent, n)
+	}), nil)
+	handler := newTestHandler(t, &fakeService{}, func(options *Options) {
+		options.NotifyIngest = ingest
+	})
+	unauthorized := request(handler, http.MethodPost, "/v1/notify", `{"type":"idle","sessionId":"s1"}`, "", "application/json")
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.Code)
+	}
+	accepted := request(handler, http.MethodPost, "/v1/claude-code/hook", `{"hook_event_name":"Stop","session_id":"s1","cwd":"/repos/op"}`, testToken, "application/json")
+	if accepted.Code != http.StatusOK || !strings.Contains(accepted.Body.String(), `"ok":true`) {
+		t.Fatalf("hook status = %d body = %s", accepted.Code, accepted.Body.String())
+	}
+	if len(sent) != 1 || sent[0].Type != notify.TypeIdle || sent[0].Source != notify.SourceClaudeCode {
+		t.Fatalf("sent = %+v", sent)
+	}
+}
+
+type notifySenderFunc func(notify.Notification)
+
+func (f notifySenderFunc) Send(_ context.Context, notification notify.Notification) error {
+	f(notification)
+	return nil
 }

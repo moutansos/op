@@ -31,6 +31,49 @@
       }
     ]
   },
+  "notifications": {
+    "enabled": false,
+    "debounce": "3s",
+    "ignoreDirectories": ["/tmp"],
+    "opencode": {
+      "baseUrl": "http://127.0.0.1:4096",
+      "desktopBaseUrl": "https://opencode.example.com",
+      "username": "",
+      "password": ""
+    },
+    "ingest": {
+      "enabled": false
+    },
+    "providers": [
+      {
+        "type": "discord",
+        "enabled": false,
+        "webhookUrl": "https://discord.com/api/webhooks/..."
+      },
+      {
+        "type": "msteams",
+        "enabled": false,
+        "webhookUrl": "https://outlook.office.com/webhook/..."
+      },
+      {
+        "type": "webhook",
+        "enabled": false,
+        "url": "https://example.com/notify",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer secret"
+        }
+      },
+      {
+        "type": "parent",
+        "enabled": false,
+        "url": "http://central.example:8787",
+        "token": "optional-shared-secret",
+        "maxHops": 8,
+        "timeout": "10s"
+      }
+    ]
+  },
   "server": {
     "enabled": false,
     "listen": "127.0.0.1:8787",

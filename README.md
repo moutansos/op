@@ -2,7 +2,8 @@
 
 `op` is a project manager for Linux and WSL. The Linux binary discovers repositories, performs Git
 operations, manages a tmux workspace, renders an in-process fuzzy project dashboard, reports host
-and tmux-owned process statistics, and optionally exposes an authenticated remote-control API.
+and tmux-owned process statistics, optionally exposes an authenticated remote-control API, and can
+notify you when coding-agent sessions go idle or need input.
 
 The managed workspace defaults to a tmux session named `code`. Its first window, `op`, runs the
 dashboard. Project windows contain an editor pane and a preferred-shell pane.
@@ -123,7 +124,8 @@ Commands:
 | `op clone <url> [--directory NAME] [--open] [--profile NAME]`                 | Clone an HTTPS, SSH, or SCP-style Git URL. `--profile` requires `--open`.                                                                                                                   |
 | `op new <name> [--open] [--profile NAME]`                                     | Initialize a repository under `repoDirectory`.                                                                                                                                              |
 | `op worktree <project> <branch> [--directory NAME] [--open] [--profile NAME]` | Create a new branch and sibling worktree.                                                                                                                                                   |
-| `op serve`                                                                    | Start the authenticated HTTP API until interrupted.                                                                                                                                         |
+| `op serve`                                                                    | Start the authenticated HTTP API until interrupted. Hosts notification watching and hook ingest when `notifications` is enabled.                                                            |
+| `op notify install-claude\|install-grok\|install-codex\|install-copilot`        | Install hook plugins that forward Claude / Grok / Codex / Copilot events to `op serve`.                                                                                                     |
 | `op remote projects`                                                          | List projects from a remote server.                                                                                                                                                         |
 | `op remote clone <url> [--directory NAME] [--open] [--profile NAME]`          | Queue a remote clone and print its job JSON.                                                                                                                                                |
 | `op remote open <project-id> [--profile NAME] [--new-instance]`               | Open/select a remote project window.                                                                                                                                                        |
@@ -164,8 +166,8 @@ Keys:
 | Key                  | Action                                                                                   |
 | -------------------- | ---------------------------------------------------------------------------------------- |
 | `/`                  | Start fuzzy filtering in the project list. Window focus also re-enters filter mode.      |
-| `up`/`down`, `j`/`k` | Navigate the focused list or action chooser.                                             |
-| `enter`              | Open the selected project with the default configured opener, or submit a form.          |
+| `up`/`down`, `j`/`k` | Navigate the focused list, tmux pane tree, or action chooser.                            |
+| `enter`              | Open the selected project, submit a form, or switch to the focused tmux pane.            |
 | `a`                  | Choose a configured tmux or GUI project opener.                                          |
 | `w`                  | Create a worktree for the selected project.                                              |
 | `n`                  | Create and open a repository.                                                            |
@@ -177,9 +179,11 @@ Keys:
 | `q`, `ctrl+c`        | Exit the dashboard to its tmux pane's shell. Plain `op` restarts it on the next invocation. |
 
 Filtering uses project names, path names, full paths, and tags. It is fzf-style matching implemented
-with Bubble Tea/Bubbles and does not invoke `fzf`. The dashboard requests terminal focus reporting so
-returning to its window restores the Projects section and filter mode while preserving the current
-query. `op` enables tmux focus events when it reconciles the managed session.
+with Bubble Tea/Bubbles and does not invoke `fzf`. Click a pane in the Tmux tree, or focus the Tmux
+section and press `enter` on the highlighted pane, to switch straight to that pane. The dashboard
+requests terminal focus reporting so returning to its window restores the Projects section and filter
+mode while preserving the current query. `op` enables tmux focus events when it reconciles the
+managed session.
 
 Dashboard search openers are separate from actions available when plain `op` targets an already-open
 project. Dashboard `enter` and `a` choose how the project should open; the targeted selector keeps
@@ -211,6 +215,21 @@ The canonical file is JSON:
     "idleAfter": "90s",
     "scanLines": 24,
     "definitions": []
+  },
+  "notifications": {
+    "enabled": false,
+    "debounce": "3s",
+    "ignoreDirectories": [],
+    "opencode": {
+      "baseUrl": "",
+      "desktopBaseUrl": "",
+      "username": "",
+      "password": ""
+    },
+    "ingest": {
+      "enabled": false
+    },
+    "providers": []
   },
   "server": {
     "enabled": false,
@@ -301,11 +320,13 @@ consuming no CPU. Detection therefore works from two observations:
   continuously because it animates a spinner or streams tokens, so a screen that is byte-identical
   across samples is producing nothing. Quiescence alone cannot separate "waiting at a prompt" from
   "running a slow tool that prints nothing", so a quiet pane is only reported as blocked when a
-  recognized prompt or confirmation pattern is visible.
+  recognized prompt or confirmation pattern is visible. An agent's first settled
+  screen is its new-session chrome and is reported idle even when a prompt is showing.
 
 Panes are classified as `working`, `awaiting input`, `awaiting approval`, `idle`, `starting`, or
 `unknown`. Blocked agents are counted in the Tmux panel title and named on the status line, so they
-are visible in every layout. Approval prompts also show the question that is blocking.
+are visible in every layout. Approval prompts also show the question that is blocking. Clicking a
+waiting pane, or pressing `enter` while it is focused in the Tmux section, selects that pane.
 
 Only panes whose foreground process matches a known agent are captured, so the number of `tmux`
 calls per refresh scales with the number of agents, not the number of panes.
@@ -336,6 +357,36 @@ whether or not it just finished rendering.
 
 Agent detection is Linux-only. Elsewhere the pane's tmux-reported command still names the agent, but
 no foreground PID is resolved.
+
+### Session Notifications
+
+`op serve` can watch OpenCode's `/global/event` SSE stream and accept hook payloads from Claude Code,
+Grok, Codex, and Copilot CLI, then push Discord, Microsoft Teams, generic webhook, or parent-instance
+notifications when a session becomes idle, asks a question, or needs permission.
+
+This is independent of observational pane detection. SSE reports accurate idle/question/permission
+transitions for OpenCode server-mode sessions, including those with no tmux pane. The dashboard
+classifier is unchanged.
+
+`notifications.enabled` turns the whole feature off. When enabled, configure at least
+`notifications.opencode.baseUrl` or `notifications.ingest.enabled`. Idle notifications from OpenCode
+are sent only on a busy-to-idle transition after `notifications.debounce` (3s by default), and are
+cancelled if the session goes busy again. Subagent sessions are skipped. `ignoreDirectories`
+suppresses any session whose project path is that directory or below it.
+
+Ingest routes share the `op serve` listener and the same bearer token. Plugin forwarders default to
+`http://127.0.0.1:8787`; set `OC_NOTIFIER_URL` / `OC_NOTIFIER_TOKEN` (or the Claude plugin user
+config) to the serve address and API token.
+
+```sh
+op notify install-claude
+op notify install-grok
+op notify install-codex
+op notify install-copilot
+```
+
+Providers: `discord`, `msteams`, `webhook`, and `parent` (forwards a normalized payload to another
+`op serve` `/v1/notify`, preserving the child hostname and desktop URL).
 
 ### Project Openers
 
@@ -541,6 +592,11 @@ conflicts.
 | `POST` | `/v1/projects/clone`          | Queue a clone (`202 Accepted`).             |
 | `POST` | `/v1/projects/{id}/open`      | Open/select a project window (`200 OK`).    |
 | `POST` | `/v1/projects/{id}/worktrees` | Queue a branch/worktree (`202 Accepted`).   |
+| `POST` | `/v1/notify`                  | Ingest a normalized notification.           |
+| `POST` | `/v1/claude-code/hook`        | Ingest a Claude Code hook payload.          |
+| `POST` | `/v1/grok-code/hook`          | Ingest a Grok hook payload.                 |
+| `POST` | `/v1/codex/hook`              | Ingest a Codex hook payload.                |
+| `POST` | `/v1/copilot-cli/hook`        | Ingest a Copilot CLI hook payload.          |
 
 Runtime API documentation:
 

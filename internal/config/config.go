@@ -31,16 +31,17 @@ func (c Config) AgentDefinitions() []agents.Definition {
 }
 
 type Config struct {
-	RepoDirectory  string          `json:"repoDirectory"`
-	PreferredShell string          `json:"preferredShell"`
-	Tmux           TmuxConfig      `json:"tmux"`
-	Stats          StatsConfig     `json:"stats"`
-	Agents         AgentsConfig    `json:"agents"`
-	Server         ServerConfig    `json:"server"`
-	Actions        ActionsConfig   `json:"actions"`
-	ProjectOpeners []ProjectOpener `json:"projectOpeners"`
-	CustomEntries  []CustomEntry   `json:"customEntries"`
-	CustomCommands []CustomCommand `json:"customCommands"`
+	RepoDirectory  string              `json:"repoDirectory"`
+	PreferredShell string              `json:"preferredShell"`
+	Tmux           TmuxConfig          `json:"tmux"`
+	Stats          StatsConfig         `json:"stats"`
+	Agents         AgentsConfig        `json:"agents"`
+	Notifications  NotificationsConfig `json:"notifications"`
+	Server         ServerConfig        `json:"server"`
+	Actions        ActionsConfig       `json:"actions"`
+	ProjectOpeners []ProjectOpener     `json:"projectOpeners"`
+	CustomEntries  []CustomEntry       `json:"customEntries"`
+	CustomCommands []CustomCommand     `json:"customCommands"`
 
 	SourcePath    string `json:"-"`
 	RootDirectory string `json:"-"`
@@ -94,6 +95,48 @@ type AgentDefinition struct {
 	// ApprovalPatterns are regular expressions that appear when the agent is
 	// blocked on an explicit confirmation.
 	ApprovalPatterns []string `json:"approvalPatterns,omitempty"`
+}
+
+const DefaultNotificationDebounce = 3 * time.Second
+
+// NotificationsConfig controls outbound session notifications hosted by op serve.
+//
+// This is independent of observational pane detection in AgentsConfig. SSE and
+// hook ingest report idle, question, and permission events from agent servers;
+// the dashboard classifier still only looks at tmux pane contents.
+type NotificationsConfig struct {
+	Enabled           bool                         `json:"enabled"`
+	Debounce          Duration                     `json:"debounce"`
+	IgnoreDirectories []string                     `json:"ignoreDirectories"`
+	OpenCode          NotificationsOpenCodeConfig  `json:"opencode"`
+	Ingest            NotificationsIngestConfig    `json:"ingest"`
+	Providers         []NotificationProviderConfig `json:"providers"`
+}
+
+// NotificationsOpenCodeConfig connects to an OpenCode server's global SSE stream.
+type NotificationsOpenCodeConfig struct {
+	BaseURL        string `json:"baseUrl"`
+	DesktopBaseURL string `json:"desktopBaseUrl"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+}
+
+// NotificationsIngestConfig accepts hook payloads on the existing serve listener.
+type NotificationsIngestConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// NotificationProviderConfig describes one outbound delivery backend.
+type NotificationProviderConfig struct {
+	Type       string            `json:"type"`
+	Enabled    bool              `json:"enabled"`
+	WebhookURL string            `json:"webhookUrl,omitempty"`
+	URL        string            `json:"url,omitempty"`
+	Method     string            `json:"method,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Token      string            `json:"token,omitempty"`
+	MaxHops    int               `json:"maxHops,omitempty"`
+	Timeout    Duration          `json:"timeout,omitempty"`
 }
 
 type ServerConfig struct {
@@ -175,6 +218,12 @@ func Defaults() Config {
 			IdleAfter:   NewDuration(agents.DefaultIdleAfter),
 			ScanLines:   agents.DefaultScanLines,
 			Definitions: make([]AgentDefinition, 0),
+		},
+		Notifications: NotificationsConfig{
+			Enabled:           false,
+			Debounce:          NewDuration(DefaultNotificationDebounce),
+			IgnoreDirectories: make([]string, 0),
+			Providers:         make([]NotificationProviderConfig, 0),
 		},
 		Server: ServerConfig{
 			Listen:    "127.0.0.1:8787",

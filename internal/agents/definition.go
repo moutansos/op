@@ -52,11 +52,12 @@ type Definition struct {
 }
 
 type compiledDefinition struct {
-	name     string
-	match    map[string]struct{}
-	busy     []*regexp.Regexp
-	prompt   []*regexp.Regexp
-	approval []*regexp.Regexp
+	name      string
+	match     map[string]struct{}
+	busy      []*regexp.Regexp
+	prompt    []*regexp.Regexp
+	approval  []*regexp.Regexp
+	newScreen []*regexp.Regexp
 }
 
 // genericBusyPatterns are rendered by essentially every agent while it works.
@@ -78,6 +79,16 @@ var genericPromptPatterns = []string{
 	`(?m)^\s*\x{2502}\s*[\x{276f}>]\s*\x{2502}?\s*$`,
 	`(?i)\?\s+for\s+shortcuts`,
 	`(?i)\btype\s+(a\s+)?(message|your\s+message)\b`,
+}
+
+// genericNewScreenPatterns recognize an agent's unused welcome / new-session
+// screen. That chrome includes a prompt, but nothing is blocked on the operator.
+var genericNewScreenPatterns = []string{
+	`(?i)\bwelcome to claude code\b`,
+	`(?i)\btips for getting started\b`,
+	`(?i)\b\/help for help\b`,
+	`(?i)\bnew session\b`,
+	`(?i)\brecent sessions?\b`,
 }
 
 // genericApprovalPatterns recognize confirmation dialogs. Agents phrase these
@@ -177,13 +188,18 @@ func compile(definitions []Definition) ([]compiledDefinition, error) {
 		if err != nil {
 			return nil, err
 		}
+		newScreen, err := compilePatterns(name, "newScreenPatterns", nil, genericNewScreenPatterns)
+		if err != nil {
+			return nil, err
+		}
 
 		compiled = append(compiled, compiledDefinition{
-			name:     name,
-			match:    match,
-			busy:     busy,
-			prompt:   prompt,
-			approval: approval,
+			name:      name,
+			match:     match,
+			busy:      busy,
+			prompt:    prompt,
+			approval:  approval,
+			newScreen: newScreen,
 		})
 	}
 	return compiled, nil

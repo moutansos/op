@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -68,6 +70,10 @@ func (f *fakeService) OpenProject(_ context.Context, request domain.OpenProjectR
 		Project: domain.Project{ID: request.ProjectID, Name: "alpha"}, Profile: request.Profile,
 		Mode: domain.ProjectOpenModeTmux, Window: domain.TmuxWindow{ID: "@alpha", Name: "alpha"},
 	}, f.err
+}
+
+func (f *fakeService) SelectPane(context.Context, domain.SelectPaneRequest) (domain.SelectPaneResult, error) {
+	return domain.SelectPaneResult{}, f.err
 }
 
 func (f *fakeService) RunProjectAction(_ context.Context, request domain.RunProjectActionRequest) (domain.RunProjectActionResult, error) {
@@ -797,5 +803,38 @@ func TestServeFallsBackToConfiguredTokenFile(t *testing.T) {
 	}
 	if runtime.serverOptions.Token != "file-token" {
 		t.Fatalf("token = %q", runtime.serverOptions.Token)
+	}
+}
+
+func TestServeWiresNotificationIngestWhenEnabled(t *testing.T) {
+	runtime := newTestRuntime()
+	runtime.lookup["OP_API_TOKEN"] = "environment-token"
+	options := runtime.options()
+	options.LoadConfig = func(string) (config.LoadResult, error) {
+		cfg := config.Defaults()
+		cfg.RepoDirectory = "/repos"
+		cfg.Notifications.Enabled = true
+		cfg.Notifications.Ingest.Enabled = true
+		return config.LoadResult{Config: cfg}, nil
+	}
+	if code := Run(context.Background(), []string{"serve"}, options); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if runtime.serverOptions.NotifyIngest == nil {
+		t.Fatal("expected notification ingest to be attached to serve")
+	}
+}
+
+func TestNotifyInstallClaudeWritesPlugin(t *testing.T) {
+	runtime := newTestRuntime()
+	target := t.TempDir()
+	if code := Run(context.Background(), []string{"notify", "install-claude", "--target", target}, runtime.options()); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(target, "scripts", "forward.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(runtime.stdout.String(), "Installed claude plugin") {
+		t.Fatalf("stdout = %q", runtime.stdout.String())
 	}
 }

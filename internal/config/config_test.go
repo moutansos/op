@@ -490,6 +490,77 @@ func TestMigrateWarnsOnUnknownAgentFields(t *testing.T) {
 	}
 }
 
+func TestMigrateReadsNotificationsBlock(t *testing.T) {
+	data := `{
+		"notifications":{
+			"enabled":true,
+			"debounce":"5s",
+			"ignoreDirectories":["/tmp"],
+			"opencode":{"baseUrl":"http://127.0.0.1:4096","desktopBaseUrl":"https://oc.example"},
+			"ingest":{"enabled":true},
+			"providers":[{"type":"discord","enabled":true,"webhookUrl":"https://discord.com/api/webhooks/x"}]
+		}
+	}`
+	config, warnings, err := Migrate([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warningPaths(warnings))
+	}
+	if !config.Notifications.Enabled || config.Notifications.Debounce.Duration != 5*time.Second {
+		t.Fatalf("notifications = %#v", config.Notifications)
+	}
+	if !config.Notifications.Ingest.Enabled || config.Notifications.OpenCode.BaseURL != "http://127.0.0.1:4096" {
+		t.Fatalf("opencode/ingest = %#v %#v", config.Notifications.OpenCode, config.Notifications.Ingest)
+	}
+	if len(config.Notifications.Providers) != 1 || config.Notifications.Providers[0].Type != "discord" {
+		t.Fatalf("providers = %#v", config.Notifications.Providers)
+	}
+}
+
+func TestValidateRejectsBadNotificationConfiguration(t *testing.T) {
+	for name, mutate := range map[string]func(*Config){
+		"no source": func(c *Config) {
+			c.Notifications.Enabled = true
+		},
+		"bad base url": func(c *Config) {
+			c.Notifications.Enabled = true
+			c.Notifications.OpenCode.BaseURL = "not-a-url"
+		},
+		"username only": func(c *Config) {
+			c.Notifications.Enabled = true
+			c.Notifications.OpenCode.BaseURL = "http://127.0.0.1:4096"
+			c.Notifications.OpenCode.Username = "user"
+		},
+		"unknown provider": func(c *Config) {
+			c.Notifications.Enabled = true
+			c.Notifications.Ingest.Enabled = true
+			c.Notifications.Providers = []NotificationProviderConfig{{Type: "pagerduty", Enabled: true}}
+		},
+		"discord missing url": func(c *Config) {
+			c.Notifications.Enabled = true
+			c.Notifications.Ingest.Enabled = true
+			c.Notifications.Providers = []NotificationProviderConfig{{Type: "discord", Enabled: true}}
+		},
+	} {
+		config := validConfig(t)
+		mutate(&config)
+		if err := Validate(config); err == nil || !domain.IsCode(err, domain.ErrorCodeConfig) {
+			t.Fatalf("Validate() with %s error = %v, want a config error", name, err)
+		}
+	}
+}
+
+func TestDisabledNotificationsSkipValidation(t *testing.T) {
+	config := validConfig(t)
+	config.Notifications.Enabled = false
+	config.Notifications.Providers = []NotificationProviderConfig{{Type: "discord", Enabled: true}}
+	if err := Validate(config); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateRejectsBadAgentConfiguration(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
 		"zero quietAfter":     func(c *Config) { c.Agents.QuietAfter = NewDuration(0) },

@@ -6,11 +6,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"os"
 	"strings"
 	"text/tabwriter"
 
 	actionpolicy "github.com/moutansos/op/internal/action"
+	"github.com/moutansos/op/internal/config"
 	"github.com/moutansos/op/internal/domain"
+	"github.com/moutansos/op/internal/notify"
 	"github.com/moutansos/op/internal/server"
 	"github.com/moutansos/op/internal/tui"
 )
@@ -24,6 +28,8 @@ func (r *runner) runLocal(ctx context.Context, args []string) error {
 		return r.runDashboard(ctx, args[1:])
 	case "serve":
 		return r.runServe(ctx, args[1:])
+	case "notify":
+		return r.runNotify(ctx, args[1:])
 	case "projects":
 		return r.runProjects(ctx, args[1:])
 	case "open":
@@ -176,7 +182,134 @@ func (r *runner) runServe(ctx context.Context, args []string) error {
 	options.TLSCertFile = r.config.Server.TLSCertFile
 	options.TLSKeyFile = r.config.Server.TLSKeyFile
 	options.Version = r.options.Version.Version
+	if r.config.Notifications.Enabled {
+		logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
+		options.Logger = logger
+		notifyService, err := notify.New(notifyOptions(r.config.Notifications, logger))
+		if err != nil {
+			return err
+		}
+		if r.config.Notifications.Ingest.Enabled {
+			options.NotifyIngest = notifyService.Ingest
+		}
+		if r.config.Notifications.OpenCode.BaseURL != "" {
+			go func() {
+				if err := notifyService.WatchOpenCode(serveCtx); err != nil && serveCtx.Err() == nil {
+					logger.Error("opencode notification watcher stopped", "err", err)
+				}
+			}()
+		}
+	}
 	return r.options.RunServer(serveCtx, service, options)
+}
+
+func notifyOptions(config config.NotificationsConfig, logger *slog.Logger) notify.Options {
+	providers := make([]notify.ProviderConfig, 0, len(config.Providers))
+	for _, provider := range config.Providers {
+		if !provider.Enabled {
+			continue
+		}
+		providers = append(providers, notify.ProviderConfig{
+			Type:       provider.Type,
+			WebhookURL: provider.WebhookURL,
+			URL:        provider.URL,
+			Method:     provider.Method,
+			Headers:    provider.Headers,
+			Token:      provider.Token,
+			MaxHops:    provider.MaxHops,
+			Timeout:    provider.Timeout.Duration,
+		})
+	}
+	return notify.Options{
+		Debounce:          config.Debounce.Duration,
+		IgnoreDirectories: config.IgnoreDirectories,
+		OpenCode: notify.OpenCodeConfig{
+			BaseURL:        config.OpenCode.BaseURL,
+			DesktopBaseURL: config.OpenCode.DesktopBaseURL,
+			Username:       config.OpenCode.Username,
+			Password:       config.OpenCode.Password,
+		},
+		Providers: providers,
+		Logger:    logger,
+	}
+}
+
+func (r *runner) runNotify(ctx context.Context, args []string) error {
+	usage := func() {
+		fmt.Fprintln(r.options.Stdout, "Usage: op notify install-claude|install-grok|install-codex|install-copilot [--source DIR] [--target DIR]")
+	}
+	if len(args) == 0 {
+		return usageError("notify requires a subcommand")
+	}
+	kind, ok := notifyInstallKind(args[0])
+	if !ok {
+		if args[0] == "--help" || args[0] == "-h" {
+			usage()
+			return errHelp
+		}
+		return usageError("unknown notify subcommand %q", args[0])
+	}
+	var source, target string
+	positionals, err := parseFlags("notify", args[1:], map[string]optionKind{"--source": valueOption, "--target": valueOption}, usage, func(set *flag.FlagSet) {
+		set.StringVar(&source, "source", "", "plugin source directory")
+		set.StringVar(&target, "target", "", "install target directory")
+	})
+	if err != nil {
+		return err
+	}
+	if len(positionals) != 0 {
+		return usageError("notify %s accepts no arguments", args[0])
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	summary, err := notify.InstallPlugin(notify.InstallOptions{
+		Kind:        kind,
+		SourceDir:   source,
+		TargetDir:   target,
+		HomeDir:     home,
+		CopilotHome: strings.TrimSpace(r.options.LookupEnv("COPILOT_HOME")),
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(r.options.Stdout, summary)
+	fmt.Fprintln(r.options.Stdout)
+	fmt.Fprintln(r.options.Stdout, notifyInstallNextSteps(kind, r.config.Server.Listen))
+	return nil
+}
+
+func notifyInstallKind(command string) (notify.InstallKind, bool) {
+	switch command {
+	case "install-claude":
+		return notify.InstallClaude, true
+	case "install-grok":
+		return notify.InstallGrok, true
+	case "install-codex":
+		return notify.InstallCodex, true
+	case "install-copilot":
+		return notify.InstallCopilot, true
+	default:
+		return "", false
+	}
+}
+
+func notifyInstallNextSteps(kind notify.InstallKind, listen string) string {
+	if listen == "" {
+		listen = "127.0.0.1:8787"
+	}
+	url := "http://" + listen
+	switch kind {
+	case notify.InstallClaude:
+		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. Restart Claude Code or run /reload-plugins\n  3. Set the plugin notifier URL to " + url + " and the token to the op API token"
+	case notify.InstallGrok:
+		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. Restart Grok or run /plugins reload\n  3. export OC_NOTIFIER_URL=" + url + " OC_NOTIFIER_TOKEN=<op API token>"
+	case notify.InstallCodex:
+		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. In Codex, run /hooks and trust the oc-notifier Stop + PermissionRequest hooks\n  3. export OC_NOTIFIER_URL=" + url + " OC_NOTIFIER_TOKEN=<op API token>"
+	default:
+		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. Restart Copilot CLI so hooks reload\n  3. export OC_NOTIFIER_URL=" + url + " OC_NOTIFIER_TOKEN=<op API token>"
+	}
 }
 
 func (r *runner) apiToken() (string, error) {

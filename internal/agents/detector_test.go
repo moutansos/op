@@ -106,7 +106,9 @@ func TestFirstSampleCannotClassifyBeyondStarting(t *testing.T) {
 	}
 }
 
-func TestQuietPromptBecomesAwaitingInput(t *testing.T) {
+// The first settled screen is the new-session chrome. It has a prompt, but the
+// operator has not been asked anything, so it must not count as waiting.
+func TestNewScreenQuietPromptIsIdle(t *testing.T) {
 	detector := newTestDetector(t)
 	capturer := newScreens(map[string][]string{"%46": {claudeIdleScreen, claudeIdleScreen}})
 	start := time.Unix(1_700_000_000, 0)
@@ -114,6 +116,47 @@ func TestQuietPromptBecomesAwaitingInput(t *testing.T) {
 
 	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
 	states := detector.Classify(context.Background(), start.Add(5*time.Second), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityIdle {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityIdle)
+	}
+}
+
+func TestWelcomeScreenIsIdleEvenAfterOutput(t *testing.T) {
+	detector := newTestDetector(t)
+	welcome := `
+✻ Welcome to Claude Code!
+
+ Tips for getting started:
+  1. Run /init to create a CLAUDE.md
+
+❯
+────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+`
+	capturer := newScreens(map[string][]string{"%46": {welcome + "\nloading", welcome, welcome}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := claudePane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(time.Second), []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(6*time.Second), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityIdle {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityIdle)
+	}
+}
+
+func TestQuietPromptBecomesAwaitingInput(t *testing.T) {
+	detector := newTestDetector(t)
+	capturer := newScreens(map[string][]string{"%46": {claudeIdleScreen, claudeIdleScreen + "\nworking", claudeIdleScreen, claudeIdleScreen}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := claudePane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(time.Second), []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(2*time.Second), []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(7*time.Second), []Pane{pane}, capturer)
 
 	if states[0].Activity != domain.AgentActivityAwaitingInput {
 		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityAwaitingInput)
@@ -160,7 +203,7 @@ func TestBusyAffordanceOverridesQuiescence(t *testing.T) {
 	}
 }
 
-func TestOpencodeQuietPromptIsAwaitingInput(t *testing.T) {
+func TestOpencodeNewScreenIsIdle(t *testing.T) {
 	detector := newTestDetector(t)
 	capturer := newScreens(map[string][]string{"%6": {opencodeIdleScreen, opencodeIdleScreen}})
 	start := time.Unix(1_700_000_000, 0)
@@ -168,6 +211,22 @@ func TestOpencodeQuietPromptIsAwaitingInput(t *testing.T) {
 
 	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
 	states := detector.Classify(context.Background(), start.Add(4*time.Second), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityIdle {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityIdle)
+	}
+}
+
+func TestOpencodeQuietPromptAfterWorkIsAwaitingInput(t *testing.T) {
+	detector := newTestDetector(t)
+	capturer := newScreens(map[string][]string{"%6": {opencodeIdleScreen, opencodeBusyScreen, opencodeIdleScreen, opencodeIdleScreen}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := opencodePane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(time.Second), []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(2*time.Second), []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(6*time.Second), []Pane{pane}, capturer)
 
 	if states[0].Activity != domain.AgentActivityAwaitingInput {
 		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityAwaitingInput)

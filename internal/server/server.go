@@ -21,6 +21,7 @@ import (
 	"unicode"
 
 	"github.com/moutansos/op/internal/domain"
+	"github.com/moutansos/op/internal/notify"
 )
 
 const (
@@ -54,6 +55,7 @@ type Options struct {
 	WriteTimeout       time.Duration
 	IdleTimeout        time.Duration
 	Logger             *slog.Logger
+	NotifyIngest       *notify.Ingest
 }
 
 // DefaultOptions returns secure defaults suitable for local CLI composition.
@@ -191,6 +193,13 @@ func (h *Handler) routes() {
 	h.mux.Handle("POST /v1/projects/clone", h.authenticate(http.HandlerFunc(h.cloneProject)))
 	h.mux.Handle("POST /v1/projects/{id}/open", h.authenticate(http.HandlerFunc(h.openProject)))
 	h.mux.Handle("POST /v1/projects/{id}/worktrees", h.authenticate(http.HandlerFunc(h.createWorktree)))
+	if h.options.NotifyIngest != nil {
+		h.mux.Handle("POST /v1/notify", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleNotify)))
+		h.mux.Handle("POST /v1/claude-code/hook", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleClaudeCodeHook)))
+		h.mux.Handle("POST /v1/grok-code/hook", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleGrokCodeHook)))
+		h.mux.Handle("POST /v1/codex/hook", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleCodexHook)))
+		h.mux.Handle("POST /v1/copilot-cli/hook", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleCopilotCLIHook)))
+	}
 
 	h.mux.HandleFunc("GET /openapi.json", h.openAPI)
 	h.mux.HandleFunc("GET /v1/openapi.json", h.openAPI)
@@ -206,6 +215,13 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("/v1/jobs/{id}", methodNotAllowed(http.MethodGet))
 	h.mux.HandleFunc("/v1/health", methodNotAllowed(http.MethodGet))
 	h.mux.HandleFunc("/v1/tmux", methodNotAllowed(http.MethodGet))
+	if h.options.NotifyIngest != nil {
+		h.mux.HandleFunc("/v1/notify", methodNotAllowed(http.MethodPost))
+		h.mux.HandleFunc("/v1/claude-code/hook", methodNotAllowed(http.MethodPost))
+		h.mux.HandleFunc("/v1/grok-code/hook", methodNotAllowed(http.MethodPost))
+		h.mux.HandleFunc("/v1/codex/hook", methodNotAllowed(http.MethodPost))
+		h.mux.HandleFunc("/v1/copilot-cli/hook", methodNotAllowed(http.MethodPost))
+	}
 	h.mux.HandleFunc("/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, domain.ResourceError(domain.ErrorCodeNotFound, "server.route", "route", "route not found", nil))
 	})

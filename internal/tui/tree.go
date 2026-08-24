@@ -76,12 +76,102 @@ func plural(count int) string {
 	return "s"
 }
 
-// renderTmux draws the managed session as a tree of windows, panes, and the
-// process actually holding each pane's terminal, annotated with what any agent
-// found there is doing.
-func (m Model) renderTmux(width, height int) string {
+type tmuxTreeLine struct {
+	text   string
+	paneID string
+}
+
+func (m Model) tmuxPanes() []domain.TmuxPane {
 	if m.tmux.Session == nil {
-		return "Managed session is not running"
+		return nil
+	}
+	var panes []domain.TmuxPane
+	for _, window := range m.tmux.Session.Windows {
+		panes = append(panes, window.Panes...)
+	}
+	return panes
+}
+
+func (m *Model) ensureTmuxCursor() {
+	m.restoreTmuxCursor(false)
+}
+
+func (m *Model) focusTmuxCursor() {
+	m.restoreTmuxCursor(true)
+}
+
+func (m *Model) restoreTmuxCursor(preferWaiting bool) {
+	panes := m.tmuxPanes()
+	if len(panes) == 0 {
+		m.tmuxCursorPaneID = ""
+		return
+	}
+	agents := m.agentsByPane()
+	valid, waiting := false, false
+	for _, pane := range panes {
+		if pane.ID != m.tmuxCursorPaneID {
+			continue
+		}
+		valid = true
+		waiting = agents[pane.ID].Activity.NeedsAttention()
+		break
+	}
+	if valid && (!preferWaiting || waiting || m.agentsNeedingAttention() == 0) {
+		return
+	}
+	for _, pane := range panes {
+		if agents[pane.ID].Activity.NeedsAttention() {
+			m.tmuxCursorPaneID = pane.ID
+			return
+		}
+	}
+	if valid {
+		return
+	}
+	m.tmuxCursorPaneID = panes[0].ID
+}
+
+func (m *Model) moveTmuxCursor(delta int) {
+	panes := m.tmuxPanes()
+	if len(panes) == 0 {
+		m.tmuxCursorPaneID = ""
+		return
+	}
+	index := 0
+	for i, pane := range panes {
+		if pane.ID == m.tmuxCursorPaneID {
+			index = i
+			break
+		}
+	}
+	m.tmuxCursorPaneID = panes[(index+delta+len(panes))%len(panes)].ID
+}
+
+func (m Model) paneAt(x, y int) (string, bool) {
+	originX, originY, width, height, ok := m.tmuxBodyOrigin()
+	if !ok || x < originX || x >= originX+width || y < originY || y >= originY+height {
+		return "", false
+	}
+	line := y - originY
+	lines := m.tmuxTreeLines(width, height)
+	if line < 0 || line >= len(lines) || lines[line].paneID == "" {
+		return "", false
+	}
+	return lines[line].paneID, true
+}
+
+func (m Model) renderTmux(width, height int) string {
+	lines := m.tmuxTreeLines(width, height)
+	texts := make([]string, len(lines))
+	for index, line := range lines {
+		texts[index] = line.text
+	}
+	return strings.Join(texts, "\n")
+}
+
+func (m Model) tmuxTreeLines(width, height int) []tmuxTreeLine {
+	if m.tmux.Session == nil {
+		return []tmuxTreeLine{{text: "Managed session is not running"}}
 	}
 	if width < 1 {
 		width = 1
@@ -98,7 +188,7 @@ func (m Model) renderTmux(width, height int) string {
 	if waiting := m.agentsNeedingAttention(); waiting > 0 {
 		summary += "  " + waitingStyle.Render(fmt.Sprintf("%d waiting", waiting))
 	}
-	lines := []string{summary}
+	lines := []tmuxTreeLine{{text: summary}}
 
 	for windowIndex, window := range session.Windows {
 		windowBranch, windowTrunk := treeBranch(windowIndex == len(session.Windows)-1)
@@ -110,18 +200,38 @@ func (m Model) renderTmux(width, height int) string {
 		if window.Profile != "" {
 			label += dimStyle.Render("  " + window.Profile)
 		}
-		lines = append(lines, label)
+		lines = append(lines, tmuxTreeLine{text: label})
 
 		for paneIndex, pane := range window.Panes {
 			paneBranch, paneTrunk := treeBranch(paneIndex == len(window.Panes)-1)
 			prefix := windowTrunk + paneBranch
-			lines = append(lines, m.renderPaneLine(prefix, width, pane, processes[pane.ID], agentStates[pane.ID]))
+			selected := m.section == tmuxSection && pane.ID == m.tmuxCursorPaneID
+			if selected {
+				prefix = strings.TrimSuffix(prefix, " ") + "▸"
+			}
+			lines = append(lines, tmuxTreeLine{
+				text:   m.renderPaneLine(prefix, width, pane, processes[pane.ID], agentStates[pane.ID], selected),
+				paneID: pane.ID,
+			})
 			if detail := paneDetailLine(agentStates[pane.ID]); detail != "" {
-				lines = append(lines, dimStyle.Render(truncate(windowTrunk+paneTrunk+"  "+detail, width)))
+				lines = append(lines, tmuxTreeLine{
+					text:   dimStyle.Render(truncate(windowTrunk+paneTrunk+"  "+detail, width)),
+					paneID: pane.ID,
+				})
 			}
 		}
 	}
-	return limitLines(lines, height)
+	return limitTreeLines(lines, height)
+}
+
+func limitTreeLines(lines []tmuxTreeLine, height int) []tmuxTreeLine {
+	if height > 0 && len(lines) > height {
+		if height == 1 {
+			return lines[:1]
+		}
+		return append(lines[:height-1], tmuxTreeLine{text: dimStyle.Render("…")})
+	}
+	return lines
 }
 
 // renderPaneLine composes one pane row. The badge is laid out first and the
@@ -133,6 +243,7 @@ func (m Model) renderPaneLine(
 	pane domain.TmuxPane,
 	process domain.PaneProcessStats,
 	agent domain.PaneAgentState,
+	selected bool,
 ) string {
 	badgeText, badgeStyle := agentBadge(agent)
 	body := pane.ID + "  " + paneCommandLabel(pane, process)
@@ -147,14 +258,18 @@ func (m Model) renderPaneLine(
 		available -= runeLen(badgeText) + 2
 	}
 	line := prefix + truncate(body, max(0, available))
+	bodyStyle := dimStyle
+	if selected {
+		bodyStyle = titleStyle
+	}
 	if badgeText == "" {
-		return dimStyle.Render(line)
+		return bodyStyle.Render(line)
 	}
 	pad := width - runeLen(line) - runeLen(badgeText)
 	if pad < 1 {
 		pad = 1
 	}
-	return dimStyle.Render(line) + strings.Repeat(" ", pad) + badgeStyle.Render(badgeText)
+	return bodyStyle.Render(line) + strings.Repeat(" ", pad) + badgeStyle.Render(badgeText)
 }
 
 // paneCommandLabel names the process that owns the pane's input. tmux reports

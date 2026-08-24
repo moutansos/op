@@ -64,6 +64,7 @@ type TmuxManager interface {
 	PrepareAttachOrSwitchTo(context.Context, string) (tmuxmanager.AttachPlan, error)
 	ExecuteAttachOrSwitch(context.Context, tmuxmanager.AttachPlan) error
 	OpenProjectWindow(context.Context, tmuxmanager.OpenProjectWindowRequest) (domain.OpenProjectResult, error)
+	SelectPane(context.Context, string) (domain.TmuxWindow, domain.TmuxPane, error)
 	Snapshot(context.Context) (domain.TmuxSnapshot, error)
 	CurrentProjectID(context.Context) (string, bool, error)
 	CurrentProjectName(context.Context) (string, bool, error)
@@ -479,6 +480,20 @@ func (s *Service) openResolved(ctx context.Context, project domain.Project, prof
 	return result, nil
 }
 
+func (s *Service) SelectPane(ctx context.Context, request domain.SelectPaneRequest) (domain.SelectPaneResult, error) {
+	const op = "app.select_pane"
+	release, err := s.acquireTmuxMutation(ctx, op)
+	if err != nil {
+		return domain.SelectPaneResult{}, err
+	}
+	defer release()
+	window, pane, err := s.tmux.SelectPane(ctx, request.PaneID)
+	if err != nil {
+		return domain.SelectPaneResult{}, typed(ctx, op, domain.ErrorCodeDependency, "select tmux pane", err)
+	}
+	return domain.SelectPaneResult{Window: window, Pane: pane}, nil
+}
+
 // RunProjectAction launches a built-in or configured local action.
 func (s *Service) RunProjectAction(ctx context.Context, request domain.RunProjectActionRequest) (domain.RunProjectActionResult, error) {
 	const op = "app.run_project_action"
@@ -847,6 +862,14 @@ func (l *lazyTmux) OpenProjectWindow(ctx context.Context, request tmuxmanager.Op
 		return domain.OpenProjectResult{}, err
 	}
 	return manager.OpenProjectWindow(ctx, request)
+}
+
+func (l *lazyTmux) SelectPane(ctx context.Context, paneID string) (domain.TmuxWindow, domain.TmuxPane, error) {
+	manager, err := l.get(ctx)
+	if err != nil {
+		return domain.TmuxWindow{}, domain.TmuxPane{}, err
+	}
+	return manager.SelectPane(ctx, paneID)
 }
 
 func (l *lazyTmux) Snapshot(ctx context.Context) (domain.TmuxSnapshot, error) {

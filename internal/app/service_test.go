@@ -717,6 +717,12 @@ func TestTmuxDelegationAndStatsComposition(t *testing.T) {
 	if err := service.AttachOrSwitchTo(context.Background(), "@project"); err != nil || tmux.attachWindowID != "@project" {
 		t.Fatalf("AttachOrSwitchTo() error = %v; target = %q", err, tmux.attachWindowID)
 	}
+	tmux.selectPaneWindow = domain.TmuxWindow{ID: "@2", Name: "notifier"}
+	tmux.selectPane = domain.TmuxPane{ID: "%46", Active: true}
+	selected, err := service.SelectPane(context.Background(), domain.SelectPaneRequest{PaneID: "%46"})
+	if err != nil || tmux.selectPaneID != "%46" || selected.Pane.ID != "%46" || selected.Window.Name != "notifier" {
+		t.Fatalf("SelectPane() = %+v, %v; pane = %q", selected, err, tmux.selectPaneID)
+	}
 	snapshot, err := service.GetTmuxSnapshot(context.Background())
 	if err != nil || snapshot.Session.Name != "code" {
 		t.Fatalf("GetTmuxSnapshot() = %+v, %v", snapshot, err)
@@ -1066,6 +1072,10 @@ type fakeTmux struct {
 	attachCalls      int
 	attachWindowID   string
 	attachErr        error
+	selectPaneID     string
+	selectPaneWindow domain.TmuxWindow
+	selectPane       domain.TmuxPane
+	selectPaneErr    error
 }
 
 type serialTmux struct {
@@ -1124,6 +1134,10 @@ func (f *plannedAttachTmux) EnsureMainSession(ctx context.Context) (domain.Ensur
 func (f *plannedAttachTmux) OpenProjectWindow(_ context.Context, request tmuxmanager.OpenProjectWindowRequest) (domain.OpenProjectResult, error) {
 	f.openEntered <- struct{}{}
 	return domain.OpenProjectResult{Project: request.Project}, nil
+}
+
+func (*plannedAttachTmux) SelectPane(context.Context, string) (domain.TmuxWindow, domain.TmuxPane, error) {
+	return domain.TmuxWindow{}, domain.TmuxPane{}, nil
 }
 
 func (*plannedAttachTmux) Snapshot(context.Context) (domain.TmuxSnapshot, error) {
@@ -1189,6 +1203,10 @@ func (f *serialTmux) ExecuteAttachOrSwitch(ctx context.Context, _ tmuxmanager.At
 	}
 }
 
+func (f *serialTmux) SelectPane(context.Context, string) (domain.TmuxWindow, domain.TmuxPane, error) {
+	return domain.TmuxWindow{}, domain.TmuxPane{}, nil
+}
+
 func (f *serialTmux) Snapshot(context.Context) (domain.TmuxSnapshot, error) {
 	return domain.TmuxSnapshot{}, nil
 }
@@ -1226,6 +1244,11 @@ func (f *fakeTmux) OpenProjectWindow(_ context.Context, request tmuxmanager.Open
 	reused := len(f.openRequests) > 1
 	f.mu.Unlock()
 	return domain.OpenProjectResult{Project: request.Project, Window: domain.TmuxWindow{ID: "@1"}, Reused: reused}, f.openErr
+}
+
+func (f *fakeTmux) SelectPane(_ context.Context, paneID string) (domain.TmuxWindow, domain.TmuxPane, error) {
+	f.selectPaneID = paneID
+	return f.selectPaneWindow, f.selectPane, f.selectPaneErr
 }
 
 func (f *fakeTmux) Snapshot(context.Context) (domain.TmuxSnapshot, error) {

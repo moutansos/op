@@ -102,6 +102,15 @@ type RunProjectActionResult struct {
 	Started bool    `json:"started"`
 }
 
+type SelectPaneRequest struct {
+	PaneID string `json:"paneId"`
+}
+
+type SelectPaneResult struct {
+	Window TmuxWindow `json:"window"`
+	Pane   TmuxPane   `json:"pane"`
+}
+
 type EnsureMainSessionResult struct {
 	Session        TmuxSession `json:"session"`
 	Created        bool        `json:"created"`

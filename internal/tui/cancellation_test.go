@@ -112,6 +112,10 @@ func (s *blockingService) OpenProject(ctx context.Context, _ domain.OpenProjectR
 	return domain.OpenProjectResult{}, s.open.block(ctx)
 }
 
+func (*blockingService) SelectPane(context.Context, domain.SelectPaneRequest) (domain.SelectPaneResult, error) {
+	return domain.SelectPaneResult{}, nil
+}
+
 func (s *blockingService) RunProjectAction(ctx context.Context, _ domain.RunProjectActionRequest) (domain.RunProjectActionResult, error) {
 	if s.action == nil {
 		return domain.RunProjectActionResult{}, nil

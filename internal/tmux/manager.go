@@ -650,6 +650,59 @@ func (m *Manager) SelectProjectWindow(ctx context.Context, projectID string) (wi
 	return window, domain.ResourceError(domain.ErrorCodeNotFound, op, projectID, "project window is not open", nil)
 }
 
+func (m *Manager) SelectPane(ctx context.Context, paneID string) (window domain.TmuxWindow, pane domain.TmuxPane, err error) {
+	const op = "tmux.select_pane"
+	defer m.recoverError(op, &err)
+	if strings.TrimSpace(paneID) == "" {
+		return window, pane, domain.FieldError(domain.ErrorCodeInvalidArgument, op, "paneID", "must not be empty")
+	}
+	if err := validatePaneID(paneID); err != nil {
+		return window, pane, domain.FieldError(domain.ErrorCodeInvalidArgument, op, "paneID", err.Error())
+	}
+	snapshot, err := m.Snapshot(ctx)
+	if err != nil {
+		return window, pane, err
+	}
+	if snapshot.Session == nil {
+		return window, pane, domain.ResourceError(domain.ErrorCodeNotFound, op, paneID, "managed session does not exist", nil)
+	}
+	var found bool
+	for _, candidate := range snapshot.Session.Windows {
+		for _, candidatePane := range candidate.Panes {
+			if candidatePane.ID != paneID {
+				continue
+			}
+			if candidatePane.Dead {
+				return window, pane, domain.ResourceError(domain.ErrorCodeConflict, op, paneID, "pane is dead", nil)
+			}
+			window = candidate
+			found = true
+			break
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		return window, pane, domain.ResourceError(domain.ErrorCodeNotFound, op, paneID, "pane was not found", nil)
+	}
+	if _, err := m.selectWindow(ctx, window.ID); err != nil {
+		return window, pane, err
+	}
+	if err := m.client.SelectPane(ctx, paneID); err != nil {
+		return window, pane, m.failure(op, "select pane", err)
+	}
+	selected, err := m.paneByID(ctx, window.ID, paneID)
+	if err != nil || selected == nil || selected.Dead || !selected.Active {
+		return window, pane, m.verification(op, "pane selection was not observable", err)
+	}
+	selectedWindow, err := m.snapshotWindow(ctx, window.ID)
+	if err != nil {
+		return window, pane, err
+	}
+	return selectedWindow, mapPane(*selected), nil
+}
+
 // Snapshot returns immutable application models and trims option output.
 func (m *Manager) Snapshot(ctx context.Context) (snapshot domain.TmuxSnapshot, err error) {
 	const op = "tmux.snapshot"

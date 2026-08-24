@@ -113,6 +113,22 @@ func TestRenderTmuxOmitsDetailForPlainInputPrompts(t *testing.T) {
 	}
 }
 
+func TestRenderTmuxHighlightsFocusedPane(t *testing.T) {
+	model := treeModel(
+		[]domain.PaneAgentState{{PaneID: "%46", Activity: domain.AgentActivityAwaitingInput, QuietSeconds: 3}},
+		nil,
+	)
+	model.section = tmuxSection
+	model.tmuxCursorPaneID = "%46"
+	output := model.renderTmux(90, 0)
+	if !strings.Contains(output, "▸%46") {
+		t.Fatalf("focused pane missing cursor marker:\n%s", output)
+	}
+	if strings.Contains(output, "▸%45") {
+		t.Fatalf("unfocused pane should not have a cursor marker:\n%s", output)
+	}
+}
+
 func TestRenderTmuxWithoutSession(t *testing.T) {
 	model := Model{haveTmux: true}
 	if got := model.renderTmux(80, 0); got != "Managed session is not running" {

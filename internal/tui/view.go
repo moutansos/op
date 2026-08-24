@@ -91,7 +91,7 @@ func (m Model) stackedView() string {
 	)
 }
 
-func (m Model) tabbedView() string {
+func (m Model) tabHeader() string {
 	tabs := []string{"1 Projects", "2 System", "3 Tmux"}
 	for index := range tabs {
 		style := dimStyle.Padding(0, 1)
@@ -100,7 +100,11 @@ func (m Model) tabbedView() string {
 		}
 		tabs[index] = style.Render(tabs[index])
 	}
-	header := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	return lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+}
+
+func (m Model) tabbedView() string {
+	header := m.tabHeader()
 	contentHeight := m.height - 6
 	var content string
 	switch m.section {
@@ -176,7 +180,44 @@ func (m Model) statusPanel(width, height int) string {
 		status += "   " + waitingStyle.Render(waiting)
 	}
 	help := dimStyle.Render("enter default   a open with   w worktree   / filter   n new   c clone   r refresh   q quit")
+	if m.section == tmuxSection {
+		help = dimStyle.Render("enter select pane   j/k move   click pane   tab sections   r refresh   q quit")
+	}
 	return renderPanel("Actions / Status", status+"\n"+help, width, height, false, nil)
+}
+
+func (m Model) tmuxBodyOrigin() (x, y, width, height int, ok bool) {
+	if m.width < minimumWidth || m.height < minimumHeight {
+		return 0, 0, 0, 0, false
+	}
+	switch {
+	case m.height < 26 || m.width < narrowWidth:
+		if m.section != tmuxSection {
+			return 0, 0, 0, 0, false
+		}
+		return 2, lipgloss.Height(m.tabHeader()) + 2, max(1, m.width-4), max(1, m.height-9), true
+	case m.width >= wideWidth:
+		leftWidth := (m.width - 1) / 2
+		rightWidth := m.width - leftWidth - 1
+		contentHeight := m.height - 1
+		projectHeight := contentHeight - 5
+		statsHeight := max(8, contentHeight/3)
+		tmuxHeight := contentHeight - statsHeight
+		left := lipgloss.JoinVertical(lipgloss.Left,
+			m.projectPanel(leftWidth, projectHeight),
+			m.statusPanel(leftWidth, 5),
+		)
+		stats := m.statsPanel(rightWidth, statsHeight)
+		return lipgloss.Width(left) + 3, lipgloss.Height(stats) + 2, max(1, rightWidth-4), max(1, tmuxHeight-3), true
+	default:
+		projectHeight := max(7, m.height/2)
+		remaining := m.height - projectHeight - 5
+		tmuxHeight := max(6, (remaining*3)/5)
+		statsHeight := remaining - tmuxHeight
+		projects := m.projectPanel(m.width, projectHeight)
+		stats := m.statsPanel(m.width, statsHeight)
+		return 2, lipgloss.Height(projects) + lipgloss.Height(stats) + 2, max(1, m.width-4), max(1, tmuxHeight-3), true
+	}
 }
 
 func (m Model) renderStats(width, height int) string {

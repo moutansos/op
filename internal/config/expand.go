@@ -53,6 +53,15 @@ func Expand(config *Config, options ExpandOptions) error {
 			return pathExpansionError(path.field, err)
 		}
 	}
+	for i := range config.Notifications.IgnoreDirectories {
+		if config.Notifications.IgnoreDirectories[i] == "" {
+			continue
+		}
+		config.Notifications.IgnoreDirectories[i], err = expandPath(config.Notifications.IgnoreDirectories[i], options, true)
+		if err != nil {
+			return pathExpansionError(fmt.Sprintf("notifications.ignoreDirectories[%d]", i), err)
+		}
+	}
 	for i := range config.CustomEntries {
 		entry := &config.CustomEntries[i]
 		if entry.Paths.Linux != "" {

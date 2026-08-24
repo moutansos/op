@@ -35,6 +35,11 @@ type openFinishedMsg struct {
 	err    error
 }
 
+type selectPaneFinishedMsg struct {
+	result domain.SelectPaneResult
+	err    error
+}
+
 type actionFinishedMsg struct {
 	result domain.RunProjectActionResult
 	err    error
@@ -83,6 +88,16 @@ func (m Model) loadStatsCmd() tea.Cmd {
 		defer cancel()
 		snapshot, err := m.service.GetStatsSnapshot(ctx)
 		return statsLoadedMsg{snapshot: snapshot, err: err}
+	}
+}
+
+func (m Model) selectPaneCmd(paneID string) tea.Cmd {
+	request := domain.SelectPaneRequest{PaneID: paneID}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(m.ctx, m.options.OperationTimeout)
+		defer cancel()
+		result, err := m.service.SelectPane(ctx, request)
+		return selectPaneFinishedMsg{result: result, err: err}
 	}
 }
 

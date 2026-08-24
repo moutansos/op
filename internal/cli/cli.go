@@ -313,6 +313,8 @@ func writeRootHelp(writer io.Writer) {
 Commands:
   dashboard                         Run the dashboard in the current pane
   serve                             Run the authenticated remote API
+  notify install-claude|install-grok|install-codex|install-copilot
+                                    Install agent hook plugins for notifications
   projects [--json]                 List local projects
   open <project ID or exact name>   Open a local project window
   clone <url> [--directory NAME] [--open]

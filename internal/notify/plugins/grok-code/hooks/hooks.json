@@ -1,0 +1,38 @@
+{
+  "description": "Forward Grok events to oc-notifier. Classification happens server-side in mapGrokCodeHook.",
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "../scripts/forward.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "../scripts/forward.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "../scripts/forward.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

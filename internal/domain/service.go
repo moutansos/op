@@ -10,6 +10,7 @@ type Service interface {
 	CloneProject(context.Context, CloneRequest) (CloneResult, error)
 	CreateWorktree(context.Context, CreateWorktreeRequest) (CreateWorktreeResult, error)
 	OpenProject(context.Context, OpenProjectRequest) (OpenProjectResult, error)
+	SelectPane(context.Context, SelectPaneRequest) (SelectPaneResult, error)
 	RunProjectAction(context.Context, RunProjectActionRequest) (RunProjectActionResult, error)
 	EnsureMainSession(context.Context) (EnsureMainSessionResult, error)
 	GetTmuxSnapshot(context.Context) (TmuxSnapshot, error)

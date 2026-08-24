@@ -715,6 +715,65 @@ func TestOpenProjectWindowBuildsLayoutReusesAndCreatesInstances(t *testing.T) {
 	}
 }
 
+func TestSelectPaneSelectsWindowAndPane(t *testing.T) {
+	fake := managedFake()
+	project := fake.addWindow("project", 1, "notifier")
+	first := fake.panes[project.ID][0]
+	fake.nextPane++
+	second := &paneState{
+		ID: fmt.Sprintf("%%%d", fake.nextPane), Index: 1, PID: int32(1000 + fake.nextPane),
+		CurrentCommand: "claude", CurrentPath: "/repo", Height: 20,
+	}
+	fake.panes[project.ID] = append(fake.panes[project.ID], second)
+
+	window, pane, err := testManager(fake).SelectPane(context.Background(), second.ID)
+	if err != nil {
+		t.Fatalf("SelectPane() error = %v", err)
+	}
+	if !project.Active {
+		t.Fatal("project window was not selected")
+	}
+	if first.Active || !second.Active {
+		t.Fatalf("pane active flags = first=%v second=%v", first.Active, second.Active)
+	}
+	if pane.ID != second.ID || !pane.Active || window.ID != project.ID {
+		t.Fatalf("result window=%+v pane=%+v", window, pane)
+	}
+}
+
+func TestSelectPaneRejectsInvalidMissingAndDeadPanes(t *testing.T) {
+	fake := managedFake()
+	window := fake.addWindow("project", 1, "notifier")
+	fake.panes[window.ID][0].Dead = true
+	deadID := fake.panes[window.ID][0].ID
+
+	_, _, err := testManager(fake).SelectPane(context.Background(), "")
+	assertCode(t, err, domain.ErrorCodeInvalidArgument)
+	_, _, err = testManager(fake).SelectPane(context.Background(), "not-a-pane")
+	assertCode(t, err, domain.ErrorCodeInvalidArgument)
+	_, _, err = testManager(fake).SelectPane(context.Background(), "%999")
+	assertCode(t, err, domain.ErrorCodeNotFound)
+	_, _, err = testManager(fake).SelectPane(context.Background(), deadID)
+	assertCode(t, err, domain.ErrorCodeConflict)
+}
+
+func TestSelectPaneRejectsUnobservedSelection(t *testing.T) {
+	fake := managedFake()
+	window := fake.addWindow("project", 1, "notifier")
+	fake.nextPane++
+	target := &paneState{
+		ID: fmt.Sprintf("%%%d", fake.nextPane), Index: 1, PID: int32(1000 + fake.nextPane),
+		CurrentCommand: "claude", CurrentPath: "/repo",
+	}
+	fake.panes[window.ID] = append(fake.panes[window.ID], target)
+	fake.silent["select-pane"] = true
+	_, _, err := testManager(fake).SelectPane(context.Background(), target.ID)
+	assertCode(t, err, domain.ErrorCodeDependency)
+	if target.Active {
+		t.Fatal("silent select-pane unexpectedly marked the pane active")
+	}
+}
+
 func TestOpenProjectWindowRecreatesDeadOwnedTaggedWindow(t *testing.T) {
 	fake := managedFake()
 	project := domain.Project{ID: "project", Name: "project", Path: "/repos/project"}

@@ -76,10 +76,11 @@ type Model struct {
 	projectSelectionRequired    bool
 	projectSelectionUnavailable bool
 
-	tmux      domain.TmuxSnapshot
-	haveTmux  bool
-	stats     domain.StatsSnapshot
-	haveStats bool
+	tmux             domain.TmuxSnapshot
+	haveTmux         bool
+	tmuxCursorPaneID string
+	stats            domain.StatsSnapshot
+	haveStats        bool
 }
 
 // NewModel builds a dashboard model without performing I/O.
@@ -129,6 +130,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.resizeChildren()
 		return m, nil
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case tea.FocusMsg:
 		if m.overlay != noOverlay {
@@ -197,6 +201,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.startPendingTmuxRefresh()
 		}
 		m.tmux, m.haveTmux, m.tmuxErr = msg.snapshot, true, nil
+		m.ensureTmuxCursor()
 		return m, m.startPendingTmuxRefresh()
 
 	case statsLoadedMsg:
@@ -207,6 +212,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.stats, m.haveStats, m.statsErr = msg.snapshot, true, nil
+		m.ensureTmuxCursor()
 		return m, nil
 
 	case projectTickMsg:
@@ -232,6 +238,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.loadStatsCmd())
 		}
 		return m, tea.Batch(cmds...)
+
+	case selectPaneFinishedMsg:
+		m.operation = ""
+		if msg.err != nil {
+			m.setError("Select pane failed", msg.err)
+			return m, nil
+		}
+		label := msg.result.Window.Name
+		if label == "" {
+			label = msg.result.Pane.ID
+		}
+		m.setStatus("Selected " + label)
+		return m, m.refreshAfterMutation(false)
 
 	case openFinishedMsg:
 		m.operation = ""
@@ -315,9 +334,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.quit()
 	case "tab":
 		m.section = (m.section + 1) % sectionCount
+		if m.section == tmuxSection {
+			m.focusTmuxCursor()
+		}
 		return m, nil
 	case "shift+tab":
 		m.section = (m.section + sectionCount - 1) % sectionCount
+		if m.section == tmuxSection {
+			m.focusTmuxCursor()
+		}
 		return m, nil
 	case "1":
 		m.section = projectsSection
@@ -327,6 +352,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "3":
 		m.section = tmuxSection
+		m.focusTmuxCursor()
 		return m, nil
 	case "n":
 		return m.openForm(createOverlay)
@@ -348,6 +374,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.worktreeProjectID = project.ID
 		return m.openForm(worktreeOverlay)
 	case "enter":
+		if m.section == tmuxSection {
+			return m.startSelectFocusedPane()
+		}
 		if m.section != projectsSection {
 			return m, nil
 		}
@@ -356,10 +385,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.refreshAll()
 	}
 
+	if m.section == tmuxSection {
+		switch key.String() {
+		case "up", "k":
+			m.moveTmuxCursor(-1)
+			return m, nil
+		case "down", "j":
+			m.moveTmuxCursor(1)
+			return m, nil
+		}
+		return m, nil
+	}
 	if m.section == projectsSection {
 		return m.updateProjects(key)
 	}
 	return m, nil
+}
+
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.overlay != noOverlay || m.operation != "" {
+		return m, nil
+	}
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m, nil
+	}
+	paneID, ok := m.paneAt(msg.X, msg.Y)
+	if !ok {
+		return m, nil
+	}
+	m.section = tmuxSection
+	return m.startSelectPane(paneID)
+}
+
+func (m Model) startSelectFocusedPane() (tea.Model, tea.Cmd) {
+	m.ensureTmuxCursor()
+	return m.startSelectPane(m.tmuxCursorPaneID)
+}
+
+func (m Model) startSelectPane(paneID string) (tea.Model, tea.Cmd) {
+	if paneID == "" {
+		return m, nil
+	}
+	if m.operation != "" {
+		m.setError("Operation busy", errors.New(m.operation+" is still running"))
+		return m, nil
+	}
+	m.tmuxCursorPaneID = paneID
+	m.operation = "select-pane"
+	m.setStatus("Selecting pane " + paneID + "...")
+	return m, m.selectPaneCmd(paneID)
 }
 
 func (m Model) quit() (tea.Model, tea.Cmd) {

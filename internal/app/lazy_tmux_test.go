@@ -59,6 +59,10 @@ func (*lazyTestTmux) OpenProjectWindow(context.Context, tmuxmanager.OpenProjectW
 	return domain.OpenProjectResult{}, nil
 }
 
+func (*lazyTestTmux) SelectPane(context.Context, string) (domain.TmuxWindow, domain.TmuxPane, error) {
+	return domain.TmuxWindow{}, domain.TmuxPane{}, nil
+}
+
 func (f *lazyTestTmux) Snapshot(context.Context) (domain.TmuxSnapshot, error) {
 	f.snapshotCalls++
 	return domain.TmuxSnapshot{}, nil

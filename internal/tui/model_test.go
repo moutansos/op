@@ -17,6 +17,9 @@ import (
 type fakeService struct {
 	listProjectsCalls int
 	openCalls         int
+	selectPaneCalls   int
+	selectPaneReq     domain.SelectPaneRequest
+	selectPaneErr     error
 	createCalls       int
 	cloneCalls        int
 	worktreeCalls     int
@@ -37,6 +40,8 @@ type fakeService struct {
 	worktreeErr error
 
 	listDeadline time.Time
+	tmux         domain.TmuxSnapshot
+	stats        domain.StatsSnapshot
 }
 
 func (f *fakeService) ListProjects(ctx context.Context) ([]domain.Project, error) {
@@ -75,6 +80,18 @@ func (f *fakeService) OpenProject(_ context.Context, request domain.OpenProjectR
 	}, nil
 }
 
+func (f *fakeService) SelectPane(_ context.Context, request domain.SelectPaneRequest) (domain.SelectPaneResult, error) {
+	f.selectPaneCalls++
+	f.selectPaneReq = request
+	if f.selectPaneErr != nil {
+		return domain.SelectPaneResult{}, f.selectPaneErr
+	}
+	return domain.SelectPaneResult{
+		Window: domain.TmuxWindow{ID: "@1", Name: "notifier"},
+		Pane:   domain.TmuxPane{ID: request.PaneID, Active: true},
+	}, nil
+}
+
 func (f *fakeService) RunProjectAction(_ context.Context, request domain.RunProjectActionRequest) (domain.RunProjectActionResult, error) {
 	f.actionCalls++
 	f.actionReq = request
@@ -91,12 +108,12 @@ func (f *fakeService) EnsureMainSession(context.Context) (domain.EnsureMainSessi
 
 func (f *fakeService) GetTmuxSnapshot(context.Context) (domain.TmuxSnapshot, error) {
 	f.tmuxCalls++
-	return domain.TmuxSnapshot{}, nil
+	return f.tmux, nil
 }
 
 func (f *fakeService) GetStatsSnapshot(context.Context) (domain.StatsSnapshot, error) {
 	f.statsCalls++
-	return domain.StatsSnapshot{}, nil
+	return f.stats, nil
 }
 
 func testModel(service *fakeService) Model {
@@ -722,4 +739,123 @@ func TestMinimumSizeAndTabbedStatisticsRendering(t *testing.T) {
 			t.Fatalf("statistics view does not contain %q:\n%s", expected, view)
 		}
 	}
+}
+
+func loadDashboardTree(model Model) Model {
+	sample := treeModel(
+		[]domain.PaneAgentState{{
+			PaneID: "%46", WindowName: "notifier", AgentName: "claude",
+			Activity: domain.AgentActivityAwaitingInput, QuietSeconds: 30,
+		}},
+		nil,
+	)
+	model = updateTestModel(model, tmuxLoadedMsg{snapshot: sample.tmux})
+	return updateTestModel(model, statsLoadedMsg{snapshot: sample.stats})
+}
+
+func TestTmuxSectionEnterSelectsFocusedWaitingPane(t *testing.T) {
+	service := &fakeService{}
+	model := loadDashboardTree(testModel(service))
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	if model.section != tmuxSection {
+		t.Fatalf("section = %d, want tmux", model.section)
+	}
+	if model.tmuxCursorPaneID != "%46" {
+		t.Fatalf("cursor pane = %q, want %%46", model.tmuxCursorPaneID)
+	}
+
+	model, cmd := updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on a focused waiting pane did not schedule SelectPane")
+	}
+	if model.operation != "select-pane" {
+		t.Fatalf("operation = %q, want select-pane", model.operation)
+	}
+	model = deliverTestCmd(model, cmd)
+	if service.selectPaneCalls != 1 || service.selectPaneReq.PaneID != "%46" {
+		t.Fatalf("SelectPane calls = %d request = %+v", service.selectPaneCalls, service.selectPaneReq)
+	}
+	if model.operation != "" || model.statusErr || !strings.Contains(model.status, "notifier") {
+		t.Fatalf("select pane result state: operation=%q status=%q err=%v", model.operation, model.status, model.statusErr)
+	}
+}
+
+func TestTmuxSectionKeysMoveCursorThenSelect(t *testing.T) {
+	service := &fakeService{}
+	model := loadDashboardTree(testModel(service))
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	if model.tmuxCursorPaneID != "%45" {
+		t.Fatalf("cursor after k = %q, want %%45", model.tmuxCursorPaneID)
+	}
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyDown})
+	if model.tmuxCursorPaneID != "%46" {
+		t.Fatalf("cursor after down = %q, want %%46", model.tmuxCursorPaneID)
+	}
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if model.tmuxCursorPaneID != "%6" {
+		t.Fatalf("cursor after j = %q, want %%6", model.tmuxCursorPaneID)
+	}
+
+	model, cmd := updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on the focused pane did not schedule SelectPane")
+	}
+	deliverTestCmd(model, cmd)
+	if service.selectPaneReq.PaneID != "%6" {
+		t.Fatalf("selected pane = %q, want %%6", service.selectPaneReq.PaneID)
+	}
+}
+
+func TestClickWaitingPaneSelectsIt(t *testing.T) {
+	service := &fakeService{}
+	model := loadDashboardTree(testModel(service))
+	view := model.View()
+	y := visibleLineIndex(view, "%46")
+	if y < 0 {
+		t.Fatalf("rendered dashboard missing waiting pane %%46:\n%s", view)
+	}
+	originX, _, _, _, ok := model.tmuxBodyOrigin()
+	if !ok {
+		t.Fatal("tmux tree origin was not found")
+	}
+
+	model, cmd := updateTestModelWithCmd(model, tea.MouseMsg{
+		X: originX, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	})
+	if cmd == nil {
+		t.Fatalf("click on waiting pane did not schedule SelectPane; origin=(%d,%d)\n%s", originX, y, view)
+	}
+	if model.section != tmuxSection || model.tmuxCursorPaneID != "%46" {
+		t.Fatalf("section=%d cursor=%q after click", model.section, model.tmuxCursorPaneID)
+	}
+	deliverTestCmd(model, cmd)
+	if service.selectPaneReq.PaneID != "%46" {
+		t.Fatalf("clicked pane = %q, want %%46", service.selectPaneReq.PaneID)
+	}
+}
+
+func TestEnterInProjectsSectionStillOpensProject(t *testing.T) {
+	service := &fakeService{}
+	model := loadProjectsForTest(loadDashboardTree(testModel(service)),
+		domain.Project{ID: "one", Name: "api-server", Path: "/repos/api-server"},
+	)
+	selectProjectForTest(t, &model, "one")
+	model, cmd := updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || service.selectPaneCalls != 0 {
+		t.Fatal("enter in projects section should open a project, not a pane")
+	}
+	cmd()
+	if service.openReq.ProjectID != "one" {
+		t.Fatalf("opened project = %q, want one", service.openReq.ProjectID)
+	}
+}
+
+func visibleLineIndex(view, needle string) int {
+	for index, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, needle) {
+			return index
+		}
+	}
+	return -1
 }

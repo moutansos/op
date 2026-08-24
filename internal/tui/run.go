@@ -10,7 +10,7 @@ import (
 
 // Run starts the dashboard in the terminal's alternate screen.
 func Run(ctx context.Context, service domain.Service, options Options) error {
-	return run(ctx, service, options, tea.WithAltScreen())
+	return run(ctx, service, options, tea.WithAltScreen(), tea.WithMouseCellMotion())
 }
 
 func run(ctx context.Context, service domain.Service, options Options, programOptions ...tea.ProgramOption) error {

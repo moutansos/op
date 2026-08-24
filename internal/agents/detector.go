@@ -59,6 +59,10 @@ type paneObservation struct {
 	foregroundPID int32
 	digest        uint64
 	changedAt     time.Time
+	// leftInitial is true once this agent run has painted something other than
+	// its first screen. The first settled screen is the new-session chrome, and
+	// that must not be reported as waiting.
+	leftInitial bool
 }
 
 // Detector classifies agent panes across successive samples. It retains the
@@ -204,18 +208,22 @@ func (d *Detector) classifyPane(
 	}
 
 	changedAt := now
+	leftInitial := false
 	switch {
 	case !hadPrevious:
 		changedAt = now
 	case previous.digest != digest:
 		changedAt = now
+		leftInitial = true
 	default:
 		changedAt = previous.changedAt
+		leftInitial = previous.leftInitial
 	}
 	d.observed[pane.PaneID] = paneObservation{
 		foregroundPID: pane.Foreground.PID,
 		digest:        digest,
 		changedAt:     changedAt,
+		leftInitial:   leftInitial,
 	}
 
 	quiet := now.Sub(changedAt)
@@ -226,7 +234,7 @@ func (d *Detector) classifyPane(
 	state.QuietSeconds = uint64(quiet / time.Second)
 
 	tail := trailingLines(screen, d.scanLines)
-	state.Activity, state.Detail = classify(definition, tail, quiet, d.quietAfter, d.idleAfter, hadPrevious)
+	state.Activity, state.Detail = classify(definition, tail, quiet, d.quietAfter, d.idleAfter, hadPrevious, leftInitial)
 	return state
 }
 
@@ -239,11 +247,16 @@ func (d *Detector) classifyPane(
 // matter, and a quiet pane is reported as blocked solely when a prompt is
 // recognized: a slow tool call that prints nothing is quiet too, and calling
 // that "awaiting input" would be the one failure mode worth avoiding.
+//
+// The agent's first settled screen is the new-session chrome. That screen
+// always has a prompt, but the operator has not been asked anything yet, so it
+// is idle rather than waiting.
 func classify(
 	definition compiledDefinition,
 	tail string,
 	quiet, quietAfter, idleAfter time.Duration,
 	hadBaseline bool,
+	leftInitial bool,
 ) (domain.AgentActivity, string) {
 	if line, ok := matchLine(definition.approval, tail); ok {
 		return domain.AgentActivityAwaitingApproval, line
@@ -257,7 +270,13 @@ func classify(
 	if quiet < quietAfter {
 		return domain.AgentActivityWorking, ""
 	}
+	if line, ok := matchLine(definition.newScreen, tail); ok {
+		return domain.AgentActivityIdle, line
+	}
 	if line, ok := matchLine(definition.prompt, tail); ok {
+		if !leftInitial {
+			return domain.AgentActivityIdle, line
+		}
 		return domain.AgentActivityAwaitingInput, line
 	}
 	if quiet >= idleAfter {
