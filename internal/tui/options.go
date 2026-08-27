@@ -30,7 +30,9 @@ type Options struct {
 	StatsRefreshInterval   time.Duration
 	RefreshTimeout         time.Duration
 	// OperationTimeout bounds open, create, clone, and worktree operations.
-	OperationTimeout time.Duration
+	OperationTimeout  time.Duration
+	SnapshotCachePath string
+	SnapshotMaxAge    time.Duration
 }
 
 func (o Options) withDefaults() Options {
@@ -51,6 +53,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.OperationTimeout <= 0 {
 		o.OperationTimeout = 30 * time.Minute
+	}
+	if o.SnapshotMaxAge <= 0 {
+		o.SnapshotMaxAge = max(10*time.Second, 2*max(o.TmuxRefreshInterval, o.StatsRefreshInterval))
 	}
 	return o
 }

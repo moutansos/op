@@ -416,6 +416,20 @@ func (c *commandClient) ServerOption(ctx context.Context, key string) (string, b
 	return c.option(ctx, []string{"show-options", "-qv", "-s", key})
 }
 
+func (c *commandClient) BindKey(ctx context.Context, table, key string, command ...string) error {
+	args := []string{"bind-key", "-T", table, key}
+	_, err := c.raw.runMutation(ctx, append(args, command...)...)
+	return err
+}
+
+func (c *commandClient) KeyBinding(ctx context.Context, table, key string) (string, bool, error) {
+	value, err := c.raw.run(ctx, "list-keys", "-T", table, key)
+	if err != nil {
+		return "", false, nil
+	}
+	return trimOneLineEnding(value), true, nil
+}
+
 func (c *commandClient) SessionOption(ctx context.Context, session, key string) (string, bool, error) {
 	return c.option(ctx, []string{"show-options", "-qv", "-t", session, key})
 }

@@ -202,7 +202,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.tmux, m.haveTmux, m.tmuxErr = msg.snapshot, true, nil
 		m.ensureTmuxCursor()
-		return m, m.startPendingTmuxRefresh()
+		return m, tea.Batch(m.publishSnapshotCmd(), m.startPendingTmuxRefresh())
 
 	case statsLoadedMsg:
 		m.statsRefreshing = false
@@ -213,6 +213,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.stats, m.haveStats, m.statsErr = msg.snapshot, true, nil
 		m.ensureTmuxCursor()
+		return m, m.publishSnapshotCmd()
+
+	case snapshotPublishedMsg:
 		return m, nil
 
 	case projectTickMsg:

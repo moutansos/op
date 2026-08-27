@@ -25,6 +25,7 @@ import (
 
 const (
 	defaultDashboardCommand = "op dashboard"
+	defaultTreeCommand      = "op tree"
 )
 
 // Catalog is the project discovery and safe-path boundary used by Service.
@@ -89,6 +90,7 @@ type Dependencies struct {
 type Options struct {
 	EnableRepositoryUpdates bool
 	DashboardCommand        string
+	TreeCommand             string
 	OperationLockDirectory  string
 	Output                  io.Writer
 	Error                   io.Writer
@@ -139,6 +141,10 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Service, err
 	if dashboardCommand == "" {
 		dashboardCommand = defaultDashboardCommand
 	}
+	treeCommand := options.TreeCommand
+	if treeCommand == "" {
+		treeCommand = defaultTreeCommand
+	}
 	defaultOpener, _ := projectOpener(cfg, cfg.Tmux.DefaultProfile)
 	tmuxConfig := tmuxmanager.ManagerConfig{
 		Session:          cfg.Tmux.Session,
@@ -146,6 +152,7 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Service, err
 		Socket:           cfg.Tmux.Socket,
 		StartDirectory:   startDirectory,
 		DashboardCommand: dashboardCommand,
+		TreeCommand:      treeCommand,
 		EditorCommand:    defaultOpener.Command,
 		PreferredShell:   cfg.PreferredShell,
 		ShellPaneRows:    cfg.Tmux.ShellPaneRows,

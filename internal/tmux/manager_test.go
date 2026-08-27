@@ -1474,6 +1474,7 @@ type fakeClient struct {
 	panes                    map[string][]*paneState
 	options                  map[string]map[string]string
 	serverOptions            map[string]string
+	bindings                 map[string]string
 	sessionOptions           map[string]string
 	splitShell               map[string]string
 	silent                   map[string]bool
@@ -1506,9 +1507,25 @@ type fakeClient struct {
 func newFakeClient() *fakeClient {
 	return &fakeClient{
 		windows: make(map[string]*windowState), panes: make(map[string][]*paneState),
-		options: make(map[string]map[string]string), serverOptions: make(map[string]string), sessionOptions: make(map[string]string),
+		options: make(map[string]map[string]string), serverOptions: make(map[string]string), sessionOptions: make(map[string]string), bindings: make(map[string]string),
 		splitShell: make(map[string]string), silent: make(map[string]bool),
 		clients: make(map[string]*clientState), clientSessions: make(map[string]string), paneSessions: make(map[string]string),
+	}
+}
+
+func TestEnsureTreeBindingUsesPrefixTAndRestoresSpace(t *testing.T) {
+	client := newFakeClient()
+	client.bindings["prefix:Space"] = "bind-key -T prefix Space switch-client -T op"
+	manager := newManager(ManagerConfig{TreeCommand: "/opt/op tree"}, client, false)
+
+	if err := manager.ensureTreeBinding(context.Background()); err != nil {
+		t.Fatalf("ensure tree binding: %v", err)
+	}
+	if got := client.bindings["prefix:Space"]; !strings.Contains(got, "next-layout") {
+		t.Fatalf("Space binding = %q, want next-layout", got)
+	}
+	if got := client.bindings["prefix:T"]; !strings.Contains(got, "display-popup -E -w 80% -h 80% /opt/op tree") {
+		t.Fatalf("T binding = %q", got)
 	}
 }
 
@@ -1842,6 +1859,20 @@ func (f *fakeClient) SetServerOption(_ context.Context, key, value string) error
 func (f *fakeClient) ServerOption(_ context.Context, key string) (string, bool, error) {
 	f.check("server-option")
 	value, exists := f.serverOptions[key]
+	return value, exists, nil
+}
+
+func (f *fakeClient) BindKey(_ context.Context, table, key string, command ...string) error {
+	f.check("bind-key")
+	if !f.silent["bind-key"] {
+		f.bindings[table+":"+key] = "bind-key -T " + table + " " + key + " " + strings.Join(command, " ")
+	}
+	return nil
+}
+
+func (f *fakeClient) KeyBinding(_ context.Context, table, key string) (string, bool, error) {
+	f.check("key-binding")
+	value, exists := f.bindings[table+":"+key]
 	return value, exists, nil
 }
 

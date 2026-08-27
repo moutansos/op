@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/moutansos/op/internal/domain"
 )
 
@@ -42,6 +43,25 @@ type fakeService struct {
 	listDeadline time.Time
 	tmux         domain.TmuxSnapshot
 	stats        domain.StatsSnapshot
+}
+
+func TestRenderStatsKeepsRowsWithinPanelWidth(t *testing.T) {
+	model := testModel(&fakeService{})
+	model.stats = domain.StatsSnapshot{
+		Host: domain.HostStats{MemoryUsed: 4 << 30, MemoryTotal: 16 << 30, UptimeSeconds: 61},
+		Processes: []domain.PaneProcessStats{{
+			WindowName: "a-very-long-window-name", PaneID: "%123", RootPID: 123456,
+			Command: "a-very-long-process-command", CPUAvailable: true, CPUPercent: 12.3,
+			ResidentBytes: 128 << 20, UptimeSeconds: 61, Dead: true,
+		}},
+	}
+	for _, width := range []int{70, 72} {
+		for _, line := range strings.Split(model.renderStats(width, 20), "\n") {
+			if got := lipgloss.Width(line); got > width {
+				t.Fatalf("width %d rendered a %d-column line: %q", width, got, line)
+			}
+		}
+	}
 }
 
 func (f *fakeService) ListProjects(ctx context.Context) ([]domain.Project, error) {

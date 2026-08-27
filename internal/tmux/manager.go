@@ -34,6 +34,7 @@ type ManagerConfig struct {
 	Socket           string
 	StartDirectory   string
 	DashboardCommand string
+	TreeCommand      string
 	EditorCommand    string
 	PreferredShell   string
 	ShellPaneRows    int
@@ -102,6 +103,9 @@ func newManager(config ManagerConfig, client tmuxClient, bootstrapped bool) *Man
 	}
 	if config.Error == nil {
 		config.Error = os.Stderr
+	}
+	if config.TreeCommand == "" {
+		config.TreeCommand = "op tree"
 	}
 	dashboardPaneCommand, _ := buildPersistentShellCommand(config.PreferredShell, config.DashboardCommand)
 	return &Manager{
@@ -185,6 +189,9 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 		}
 	}
 	if err := m.enableFocusEvents(ctx); err != nil {
+		return result, err
+	}
+	if err := m.ensureTreeBinding(ctx); err != nil {
 		return result, err
 	}
 
@@ -1063,6 +1070,53 @@ func (m *Manager) enableFocusEvents(ctx context.Context) error {
 		return m.verification("tmux.ensure_main_session", "focus-events mutation was not observable", err)
 	}
 	return nil
+}
+
+func (m *Manager) ensureTreeBinding(ctx context.Context) error {
+	// Restore tmux's default Space behavior if an earlier op version replaced it.
+	current, exists, err := m.client.KeyBinding(ctx, "prefix", "Space")
+	if err != nil {
+		return m.failure("tmux.ensure_main_session", "read legacy tree key binding", err)
+	}
+	if exists && strings.Contains(current, "switch-client -T op") {
+		if err := m.client.BindKey(ctx, "prefix", "Space", "next-layout"); err != nil {
+			return m.failure("tmux.ensure_main_session", "restore layout key binding", err)
+		}
+	}
+
+	bindings := []struct {
+		table, key string
+		command    []string
+		contains   []string
+	}{
+		{table: "prefix", key: "T", command: []string{"display-popup", "-E", "-w", "80%", "-h", "80%", m.config.TreeCommand}, contains: []string{"display-popup", m.config.TreeCommand}},
+	}
+	for _, binding := range bindings {
+		current, exists, err := m.client.KeyBinding(ctx, binding.table, binding.key)
+		if err != nil {
+			return m.failure("tmux.ensure_main_session", "read tree key binding", err)
+		}
+		if exists && containsAll(current, binding.contains) {
+			continue
+		}
+		if err := m.client.BindKey(ctx, binding.table, binding.key, binding.command...); err != nil {
+			return m.failure("tmux.ensure_main_session", "install tree key binding", err)
+		}
+		current, exists, err = m.client.KeyBinding(ctx, binding.table, binding.key)
+		if err != nil || !exists || !containsAll(current, binding.contains) {
+			return m.verification("tmux.ensure_main_session", "tree key binding mutation was not observable", err)
+		}
+	}
+	return nil
+}
+
+func containsAll(value string, fragments []string) bool {
+	for _, fragment := range fragments {
+		if !strings.Contains(value, fragment) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Manager) verifyPaneCommand(ctx context.Context, windowID, paneID, command string) error {

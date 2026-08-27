@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -52,6 +54,7 @@ type Options struct {
 	LoadConfig    func(string) (config.LoadResult, error)
 	NewService    func(context.Context, config.Config, app.Options) (Service, error)
 	RunTUI        func(context.Context, domain.Service, tui.Options) error
+	RunTreeTUI    func(context.Context, domain.Service, tui.Options) error
 	SelectAction  tui.Selector
 	SelectProject tui.ProjectSelector
 	RunServer     func(context.Context, domain.Service, server.Options) error
@@ -163,6 +166,9 @@ func withDefaults(options Options) Options {
 	if options.RunTUI == nil {
 		options.RunTUI = tui.Run
 	}
+	if options.RunTreeTUI == nil {
+		options.RunTreeTUI = tui.RunTree
+	}
 	if options.SelectAction == nil {
 		options.SelectAction = tui.SelectAction
 	}
@@ -209,17 +215,17 @@ func (r *runner) getService(ctx context.Context, dependencies ...string) (Servic
 	if err != nil {
 		return nil, domain.NewError(domain.ErrorCodeDependency, "cli.executable", "normalize current executable", err)
 	}
-	dashboardArgs := []string{shellWord(executable)}
+	baseArgs := []string{shellWord(executable)}
 	if r.config.SourcePath != "" {
-		dashboardArgs = append(dashboardArgs, "--config", shellWord(r.config.SourcePath))
+		baseArgs = append(baseArgs, "--config", shellWord(r.config.SourcePath))
 	}
 	if r.globals.noRepoUpdate {
-		dashboardArgs = append(dashboardArgs, "--no-repo-update")
+		baseArgs = append(baseArgs, "--no-repo-update")
 	}
-	dashboardArgs = append(dashboardArgs, "dashboard")
 	service, err := r.options.NewService(ctx, r.config, app.Options{
 		EnableRepositoryUpdates: !r.globals.noRepoUpdate,
-		DashboardCommand:        strings.Join(dashboardArgs, " "),
+		DashboardCommand:        strings.Join(append(slices.Clone(baseArgs), "dashboard"), " "),
+		TreeCommand:             strings.Join(append(baseArgs, "tree"), " "),
 		Output:                  r.options.Stdout,
 		Error:                   r.options.Stderr,
 	})
@@ -235,6 +241,21 @@ func shellWord(value string) string {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func (r *runner) snapshotCachePath() string {
+	root := r.options.LookupEnv("XDG_RUNTIME_DIR")
+	if root == "" || !filepath.IsAbs(root) {
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			return ""
+		}
+		root = filepath.Join(cache, "op", "runtime")
+	} else {
+		root = filepath.Join(root, "op")
+	}
+	identity := sha256.Sum256([]byte(r.config.Tmux.Socket + "\x00" + r.config.Tmux.Session))
+	return filepath.Join(root, fmt.Sprintf("dashboard-%x.json", identity[:8]))
 }
 
 func runServer(ctx context.Context, service domain.Service, options server.Options) error {
@@ -312,6 +333,7 @@ func writeRootHelp(writer io.Writer) {
 
 Commands:
   dashboard                         Run the dashboard in the current pane
+  tree                              Select a pane from the managed process tree
   serve                             Run the authenticated remote API
   notify install-claude|install-grok|install-codex|install-copilot
                                     Install agent hook plugins for notifications

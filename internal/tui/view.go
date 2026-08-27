@@ -120,9 +120,6 @@ func (m Model) tabbedView() string {
 
 func (m Model) projectPanel(width, height int) string {
 	title := "Projects"
-	if m.projectsRefreshing {
-		title += "  refreshing"
-	}
 	if m.projectsErr != nil {
 		title += "  stale"
 	}
@@ -131,9 +128,6 @@ func (m Model) projectPanel(width, height int) string {
 
 func (m Model) statsPanel(width, height int) string {
 	title := "System + Processes"
-	if m.statsRefreshing {
-		title += "  refreshing"
-	}
 	if m.statsErr != nil {
 		title += "  stale"
 	}
@@ -148,9 +142,6 @@ func (m Model) tmuxPanel(width, height int) string {
 	title := "Tmux"
 	if waiting := m.agentsNeedingAttention(); waiting > 0 {
 		title += fmt.Sprintf("  %d agent%s waiting", waiting, plural(waiting))
-	}
-	if m.tmuxRefreshing {
-		title += "  refreshing"
 	}
 	if m.tmuxErr != nil {
 		title += "  stale"
@@ -223,28 +214,29 @@ func (m Model) tmuxBodyOrigin() (x, y, width, height int, ok bool) {
 func (m Model) renderStats(width, height int) string {
 	host := m.stats.Host
 	lines := []string{
-		fmt.Sprintf("CPU %5.1f%%   Memory %s / %s", host.CPUPercent, formatBytes(host.MemoryUsed), formatBytes(host.MemoryTotal)),
-		fmt.Sprintf("Load %.2f %.2f %.2f   Uptime %s", host.LoadAverage[0], host.LoadAverage[1], host.LoadAverage[2], formatDuration(host.UptimeSeconds)),
+		truncate(fmt.Sprintf("CPU %5.1f%%   Memory %s / %s", host.CPUPercent, formatBytes(host.MemoryUsed), formatBytes(host.MemoryTotal)), width),
+		truncate(fmt.Sprintf("Load %.2f %.2f %.2f   Uptime %s", host.LoadAverage[0], host.LoadAverage[1], host.LoadAverage[2], formatDuration(host.UptimeSeconds)), width),
 	}
 	if !m.stats.CapturedAt.IsZero() {
-		lines = append(lines, dimStyle.Render("sample "+m.stats.CapturedAt.Format(time.Kitchen)))
+		lines = append(lines, dimStyle.Render(truncate("sample "+m.stats.CapturedAt.Format(time.Kitchen), width)))
 	}
 	if len(m.stats.Processes) == 0 {
 		return strings.Join(append(lines, "", "No tmux-owned processes"), "\n")
 	}
 
 	lines = append(lines, "")
-	if width >= 70 {
-		lines = append(lines, dimStyle.Render(fmt.Sprintf("%-14s %-7s %6s %-16s %6s %8s %8s", "WINDOW", "PANE", "PID", "COMMAND", "CPU", "RSS", "UPTIME")))
+	if width >= 72 {
+		lines = append(lines, dimStyle.Render(truncate(fmt.Sprintf("%-14s %-7s %6s %-16s %6s %8s %8s", "WINDOW", "PANE", "PID", "COMMAND", "CPU", "RSS", "UPTIME"), width)))
 		for _, process := range m.stats.Processes {
 			state := ""
 			if process.Dead {
 				state = " dead"
 			}
-			lines = append(lines, fmt.Sprintf("%-14s %-7s %6d %-16s %6s %8s %8s%s",
+			line := fmt.Sprintf("%-14s %-7s %6d %-16s %6s %8s %8s%s",
 				truncate(process.WindowName, 14), truncate(process.PaneID, 7), process.RootPID,
 				truncate(process.Command, 16), formatProcessCPU(process), formatBytes(process.ResidentBytes),
-				formatDuration(process.UptimeSeconds), state))
+				formatDuration(process.UptimeSeconds), state)
+			lines = append(lines, truncate(line, width))
 		}
 	} else {
 		for _, process := range m.stats.Processes {
@@ -252,8 +244,9 @@ func (m Model) renderStats(width, height int) string {
 			if process.Dead {
 				state = "dead"
 			}
-			lines = append(lines, fmt.Sprintf("%s %s  pid %d  %s", process.WindowName, process.PaneID, process.RootPID, state))
-			lines = append(lines, dimStyle.Render(fmt.Sprintf("  %s  CPU %s  RSS %s  up %s", process.Command, formatProcessCPU(process), formatBytes(process.ResidentBytes), formatDuration(process.UptimeSeconds))))
+			lines = append(lines, truncate(fmt.Sprintf("%s %s  pid %d  %s", process.WindowName, process.PaneID, process.RootPID, state), width))
+			detail := fmt.Sprintf("  %s  CPU %s  RSS %s  up %s", process.Command, formatProcessCPU(process), formatBytes(process.ResidentBytes), formatDuration(process.UptimeSeconds))
+			lines = append(lines, dimStyle.Render(truncate(detail, width)))
 		}
 	}
 	return limitLines(lines, height)

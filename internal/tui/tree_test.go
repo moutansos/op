@@ -168,9 +168,9 @@ func TestWaitingAgentSummaryEmptyWhenNothingBlocked(t *testing.T) {
 	}
 }
 
-// Badges are scanned as a column, so every one of them must end flush with the
-// right edge regardless of how long the pane description is.
-func TestBadgesAreRightAligned(t *testing.T) {
+// Badges stay next to the pane description rather than touching the terminal
+// edge, where tmux may wrap the trailing duration.
+func TestBadgesStayOnPaneLine(t *testing.T) {
 	const width = 96
 	model := treeModel(
 		[]domain.PaneAgentState{
@@ -187,8 +187,11 @@ func TestBadgesAreRightAligned(t *testing.T) {
 		if !strings.Contains(line, "●") && !strings.Contains(line, "◐") {
 			continue
 		}
-		if got := lipgloss.Width(line); got != width {
-			t.Fatalf("badge line width = %d, want %d: %q", got, width, line)
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("badge line width = %d, exceeds %d: %q", got, width, line)
+		}
+		if strings.HasSuffix(line, "●") || strings.HasSuffix(line, "◐") {
+			t.Fatalf("badge text was separated from its marker: %q", line)
 		}
 	}
 }

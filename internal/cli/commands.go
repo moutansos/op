@@ -26,6 +26,8 @@ func (r *runner) runLocal(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "dashboard":
 		return r.runDashboard(ctx, args[1:])
+	case "tree":
+		return r.runTree(ctx, args[1:])
 	case "serve":
 		return r.runServe(ctx, args[1:])
 	case "notify":
@@ -137,7 +139,30 @@ func (r *runner) runDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := service.EnsureMainSession(ctx); err != nil {
+		return err
+	}
 	return r.runDashboardTUI(ctx, service)
+}
+
+func (r *runner) runTree(ctx context.Context, args []string) error {
+	usage := func() { fmt.Fprintln(r.options.Stdout, "Usage: op tree") }
+	positionals, err := parseFlags("tree", args, nil, usage, func(*flag.FlagSet) {})
+	if err != nil {
+		return err
+	}
+	if len(positionals) != 0 {
+		return usageError("tree accepts no arguments")
+	}
+	service, err := r.getService(ctx, "tmux")
+	if err != nil {
+		return err
+	}
+	return r.options.RunTreeTUI(ctx, service, tui.Options{
+		TmuxRefreshInterval:  r.config.Stats.TmuxRefreshInterval.Duration,
+		StatsRefreshInterval: r.config.Stats.RefreshInterval.Duration,
+		SnapshotCachePath:    r.snapshotCachePath(),
+	})
 }
 
 func (r *runner) runDashboardTUI(ctx context.Context, service Service) error {
@@ -151,6 +176,7 @@ func (r *runner) runDashboardTUI(ctx context.Context, service Service) error {
 		ProjectRefreshInterval: r.config.Stats.TmuxRefreshInterval.Duration,
 		TmuxRefreshInterval:    r.config.Stats.TmuxRefreshInterval.Duration,
 		StatsRefreshInterval:   r.config.Stats.RefreshInterval.Duration,
+		SnapshotCachePath:      r.snapshotCachePath(),
 	})
 }
 

@@ -69,6 +69,8 @@ type tmuxClient interface {
 	WindowOption(context.Context, string, string) (string, bool, error)
 	SetServerOption(context.Context, string, string) error
 	ServerOption(context.Context, string) (string, bool, error)
+	BindKey(context.Context, string, string, ...string) error
+	KeyBinding(context.Context, string, string) (string, bool, error)
 	SessionOption(context.Context, string, string) (string, bool, error)
 
 	CurrentWindow(context.Context, string) (string, error)

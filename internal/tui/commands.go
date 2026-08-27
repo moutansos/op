@@ -63,6 +63,7 @@ type worktreeFinishedMsg struct {
 type projectTickMsg struct{}
 type tmuxTickMsg struct{}
 type statsTickMsg struct{}
+type snapshotPublishedMsg struct{}
 
 func (m Model) loadProjectsCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -88,6 +89,20 @@ func (m Model) loadStatsCmd() tea.Cmd {
 		defer cancel()
 		snapshot, err := m.service.GetStatsSnapshot(ctx)
 		return statsLoadedMsg{snapshot: snapshot, err: err}
+	}
+}
+
+func (m Model) publishSnapshotCmd() tea.Cmd {
+	if m.options.SnapshotCachePath == "" || !m.haveTmux || !m.haveStats {
+		return nil
+	}
+	snapshot := cachedDashboardSnapshot{
+		Version: snapshotCacheVersion, PublishedAt: time.Now(), Tmux: m.tmux, Stats: m.stats,
+	}
+	path := m.options.SnapshotCachePath
+	return func() tea.Msg {
+		_ = writeSnapshotCache(path, snapshot)
+		return snapshotPublishedMsg{}
 	}
 }
 

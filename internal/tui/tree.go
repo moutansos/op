@@ -265,11 +265,7 @@ func (m Model) renderPaneLine(
 	if badgeText == "" {
 		return bodyStyle.Render(line)
 	}
-	pad := width - runeLen(line) - runeLen(badgeText)
-	if pad < 1 {
-		pad = 1
-	}
-	return bodyStyle.Render(line) + strings.Repeat(" ", pad) + badgeStyle.Render(badgeText)
+	return bodyStyle.Render(line) + "  " + badgeStyle.Render(badgeText)
 }
 
 // paneCommandLabel names the process that owns the pane's input. tmux reports

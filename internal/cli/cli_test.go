@@ -120,6 +120,7 @@ type testRuntime struct {
 	appOptions              app.Options
 	lookup                  map[string]string
 	tuiCalls                int
+	treeTUICalls            int
 	tuiOptions              tui.Options
 	serverCalls             int
 	serverOptions           server.Options
@@ -191,6 +192,11 @@ func (r *testRuntime) options() Options {
 		},
 		RunTUI: func(_ context.Context, _ domain.Service, options tui.Options) error {
 			r.tuiCalls++
+			r.tuiOptions = options
+			return nil
+		},
+		RunTreeTUI: func(_ context.Context, _ domain.Service, options tui.Options) error {
+			r.treeTUICalls++
 			r.tuiOptions = options
 			return nil
 		},
@@ -425,11 +431,24 @@ func TestDashboardUsesConfigOptionsWithoutAttaching(t *testing.T) {
 	if code := Run(context.Background(), []string{"dashboard"}, runtime.options()); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
 	}
-	if runtime.tuiCalls != 1 || runtime.service.ensureCalls != 0 || runtime.service.attachCalls != 0 {
+	if runtime.tuiCalls != 1 || runtime.service.ensureCalls != 1 || runtime.service.attachCalls != 0 {
 		t.Fatalf("tui=%d ensure=%d attach=%d", runtime.tuiCalls, runtime.service.ensureCalls, runtime.service.attachCalls)
 	}
 	if len(runtime.tuiOptions.ProjectOpeners) != 1 || runtime.tuiOptions.ProjectOpeners[0].ID != "nvim" || runtime.tuiOptions.StatsRefreshInterval != 2*time.Second {
 		t.Fatalf("tui options = %+v", runtime.tuiOptions)
+	}
+}
+
+func TestTreeRunsFocusedTUI(t *testing.T) {
+	runtime := newTestRuntime()
+	if code := Run(context.Background(), []string{"tree"}, runtime.options()); code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, runtime.stderr.String())
+	}
+	if runtime.treeTUICalls != 1 || runtime.tuiCalls != 0 {
+		t.Fatalf("tree TUI calls = %d, dashboard TUI calls = %d", runtime.treeTUICalls, runtime.tuiCalls)
+	}
+	if runtime.appOptions.TreeCommand != "/opt/op --config /config/config.json tree" {
+		t.Fatalf("tree command = %q", runtime.appOptions.TreeCommand)
 	}
 }
 
