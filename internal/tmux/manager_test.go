@@ -1368,13 +1368,90 @@ func TestManagerConfigAndNameValidation(t *testing.T) {
 
 func TestCommandExecutableParsesQuotedExecutable(t *testing.T) {
 	for command, want := range map[string]string{
-		`exec '/path with spaces/op' dashboard`:    "op",
-		`'/path with spaces/op' dashboard`:         "op",
-		`exec '/path/with '\''quote/op' dashboard`: "op",
+		`exec '/path with spaces/op' dashboard`:             "op",
+		`'/path with spaces/op' dashboard`:                  "op",
+		`exec '/path/with '\''quote/op' dashboard`:          "op",
+		`exec '/mnt/c/Program Files/PowerShell/7/pwsh.exe'`: "pwsh.exe",
 	} {
 		if got := commandExecutable(command); got != want {
 			t.Fatalf("commandExecutable(%q) = %q, want %q", command, got, want)
 		}
+	}
+}
+
+func TestCommandBaseNameStripsWindowsAndPOSIXPaths(t *testing.T) {
+	for executable, want := range map[string]string{
+		`C:\Tools\pwsh.exe`:                          "pwsh.exe",
+		`/mnt/c/Program Files/PowerShell/7/pwsh.exe`: "pwsh.exe",
+		"pwsh.exe": "pwsh.exe",
+	} {
+		if got := commandBaseName(executable); got != want {
+			t.Fatalf("commandBaseName(%q) = %q, want %q", executable, got, want)
+		}
+	}
+}
+
+func TestPaneCommandMatchesWSLInteropAndPowerShellAliases(t *testing.T) {
+	expected := map[string]bool{"pwsh.exe": true}
+	for _, observed := range []string{"pwsh.exe", "pwsh", "PWSH.EXE", "init", "wslrelay"} {
+		if !paneCommandMatches(observed, expected) {
+			t.Fatalf("paneCommandMatches(%q, pwsh.exe) = false", observed)
+		}
+	}
+	if paneCommandMatches("init", map[string]bool{"zsh": true}) {
+		t.Fatal("WSL interop comm matched a POSIX shell")
+	}
+	if paneCommandMatches("nvim", expected) {
+		t.Fatal("unrelated command matched pwsh.exe")
+	}
+}
+
+func TestDashboardWrapsWindowsExeShellWithPOSIX(t *testing.T) {
+	command, err := buildPersistentShellCommand(linuxPersistentShell("pwsh.exe"), "op dashboard")
+	if err != nil {
+		t.Fatalf("buildPersistentShellCommand() error = %v", err)
+	}
+	words := shellWords(command)
+	if !slices.Contains(words, "sh") || !slices.Contains(words, "-ic") || slices.Contains(words, "-NoExit") || slices.Contains(words, "pwsh.exe") {
+		t.Fatalf("dashboard wrapper words = %#v", words)
+	}
+}
+
+func TestLinuxPersistentShellUsesPOSIXForWindowsExe(t *testing.T) {
+	if got := linuxPersistentShell("pwsh.exe"); got != "sh" {
+		t.Fatalf("linuxPersistentShell(pwsh.exe) = %q, want sh", got)
+	}
+	if got := linuxPersistentShell("/usr/bin/pwsh.exe -NoLogo"); got != "sh" {
+		t.Fatalf("linuxPersistentShell(pwsh.exe path) = %q, want sh", got)
+	}
+	if got := linuxPersistentShell("pwsh"); got != "pwsh" {
+		t.Fatalf("linuxPersistentShell(pwsh) = %q, want pwsh", got)
+	}
+	if got := linuxPersistentShell("zsh -l"); got != "zsh -l" {
+		t.Fatalf("linuxPersistentShell(zsh) = %q, want zsh -l", got)
+	}
+}
+
+func TestOpenProjectWindowAcceptsWSLInteropForeground(t *testing.T) {
+	fake := managedFake()
+	fake.startupCommandOverride = "init"
+	manager := testManager(fake)
+	manager.config.PreferredShell = "pwsh.exe"
+	project := domain.Project{ID: "project-1", Name: "repo.one", Path: "/repos/repo.one", Kind: domain.ProjectKindRepository}
+
+	result, err := manager.OpenProjectWindow(context.Background(), OpenProjectWindowRequest{Project: project})
+	if err != nil {
+		t.Fatalf("OpenProjectWindow() error = %v", err)
+	}
+	if result.Reused || len(result.Window.Panes) != 2 {
+		t.Fatalf("result = %+v", result)
+	}
+	panes := fake.panes[result.Window.ID]
+	if panes[1].CurrentCommand != "init" {
+		t.Fatalf("shell pane command = %q", panes[1].CurrentCommand)
+	}
+	if got := fake.splitShell[panes[1].ID]; got != "pwsh.exe" {
+		t.Fatalf("split shell command = %q", got)
 	}
 }
 

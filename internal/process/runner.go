@@ -257,12 +257,19 @@ func validateWorkingDirectory(op, path string) error {
 }
 
 func preferredShellArgs(shell, command string) []string {
-	switch strings.ToLower(filepath.Base(shell)) {
+	switch strings.ToLower(executableBaseName(shell)) {
 	case "pwsh", "pwsh.exe", "powershell", "powershell.exe":
 		return []string{"-NoExit", "-Command", command}
 	default:
 		return []string{"-ic", command}
 	}
+}
+
+func executableBaseName(executable string) string {
+	if separator := strings.LastIndexAny(executable, `/\\`); separator >= 0 {
+		executable = executable[separator+1:]
+	}
+	return executable
 }
 
 func persistentPreferredShellArgs(shell Command, command string) []string {

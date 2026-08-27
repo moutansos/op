@@ -295,6 +295,9 @@ entries; directory symlinks are not followed. `customEntries` add explicitly nam
 outside that root.
 
 `preferredShell` may contain an executable plus arguments but not shell operators.
+On WSL, `pwsh.exe` and `powershell.exe` are launched through Windows interop and use
+`-NoExit -Command` wrapping. The Linux dashboard cannot run inside a Windows `.exe`
+shell, so that pane is wrapped with `sh` instead.
 `actions.guiEditors` controls whether the `code .` action is offered. `server.enabled` records
 configuration intent but does not start a background process; invoke `op serve` or install the
 systemd user unit.

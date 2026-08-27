@@ -107,7 +107,7 @@ func newManager(config ManagerConfig, client tmuxClient, bootstrapped bool) *Man
 	if config.TreeCommand == "" {
 		config.TreeCommand = "op tree"
 	}
-	dashboardPaneCommand, _ := buildPersistentShellCommand(config.PreferredShell, config.DashboardCommand)
+	dashboardPaneCommand, _ := buildPersistentShellCommand(linuxPersistentShell(config.PreferredShell), config.DashboardCommand)
 	return &Manager{
 		config:                config,
 		client:                client,
@@ -158,7 +158,10 @@ func validateConfig(config ManagerConfig) error {
 	if config.ShellPaneRows <= 0 {
 		return domain.FieldError(domain.ErrorCodeInvalidArgument, op, "shellPaneRows", "must be greater than zero")
 	}
-	if _, err := buildPersistentShellCommand(config.PreferredShell, config.DashboardCommand); err != nil {
+	if _, err := parseDirectCommand(config.PreferredShell); err != nil {
+		return domain.FieldError(domain.ErrorCodeInvalidArgument, op, "preferredShell", err.Error())
+	}
+	if _, err := buildPersistentShellCommand(linuxPersistentShell(config.PreferredShell), config.DashboardCommand); err != nil {
 		return domain.FieldError(domain.ErrorCodeInvalidArgument, op, "preferredShell", err.Error())
 	}
 	return nil
@@ -1155,7 +1158,7 @@ func (m *Manager) verifyPaneCommands(ctx context.Context, windowID, paneID strin
 			return m.verification("tmux.send_command", "pane exited while starting "+strings.Join(expectedNames, " or "), nil)
 		}
 		now := time.Now()
-		if expected[pane.CurrentCommand] {
+		if paneCommandMatches(pane.CurrentCommand, expected) {
 			if stableSince.IsZero() {
 				stableSince = now
 			}
@@ -1461,10 +1464,66 @@ func commandExecutable(command string) string {
 	if executable == "exec" && len(fields) > 1 {
 		executable = fields[1]
 	}
-	if slash := strings.LastIndexByte(executable, '/'); slash >= 0 {
-		executable = executable[slash+1:]
+	return commandBaseName(executable)
+}
+
+func commandBaseName(executable string) string {
+	if separator := strings.LastIndexAny(executable, `/\\`); separator >= 0 {
+		executable = executable[separator+1:]
 	}
 	return executable
+}
+
+func paneCommandMatches(observed string, expected map[string]bool) bool {
+	if expected[observed] {
+		return true
+	}
+	observedName := strings.ToLower(commandBaseName(observed))
+	if expected[observedName] {
+		return true
+	}
+	for name := range expected {
+		if executableNamesMatch(observedName, name) {
+			return true
+		}
+		if isWSLInteropComm(observedName) && isWindowsInteropExecutable(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func executableNamesMatch(observed, expected string) bool {
+	a := strings.ToLower(commandBaseName(observed))
+	b := strings.ToLower(commandBaseName(expected))
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	return strings.TrimSuffix(a, ".exe") == strings.TrimSuffix(b, ".exe")
+}
+
+func isWSLInteropComm(name string) bool {
+	switch strings.ToLower(commandBaseName(name)) {
+	case "init", "wslrelay", "wsl":
+		return true
+	default:
+		return false
+	}
+}
+
+func isWindowsInteropExecutable(executable string) bool {
+	return strings.HasSuffix(strings.ToLower(commandBaseName(executable)), ".exe")
+}
+
+func linuxPersistentShell(preferredShell string) string {
+	shell, err := parseDirectCommand(preferredShell)
+	if err != nil || len(shell) == 0 || !isWindowsInteropExecutable(shell[0]) {
+		return preferredShell
+	}
+	return "sh"
 }
 
 func buildEditorPaneCommand(preferredShell, editorCommand string) (string, error) {
@@ -1495,10 +1554,7 @@ func quoteShellWords(words []string) string {
 }
 
 func isPowerShell(executable string) bool {
-	if separator := strings.LastIndexAny(executable, `/\\`); separator >= 0 {
-		executable = executable[separator+1:]
-	}
-	switch strings.ToLower(executable) {
+	switch strings.ToLower(commandBaseName(executable)) {
 	case "pwsh", "pwsh.exe", "powershell", "powershell.exe":
 		return true
 	default:

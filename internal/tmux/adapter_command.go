@@ -39,7 +39,7 @@ func newCommandClient(ctx context.Context, config ManagerConfig) (tmuxClient, bo
 			if config.StartDirectory != "" {
 				args = append(args, "-c", config.StartDirectory)
 			}
-			dashboardPaneCommand, commandErr := buildPersistentShellCommand(config.PreferredShell, config.DashboardCommand)
+			dashboardPaneCommand, commandErr := buildPersistentShellCommand(linuxPersistentShell(config.PreferredShell), config.DashboardCommand)
 			if commandErr != nil {
 				return nil, false, domain.NewError(domain.ErrorCodeInvalidArgument, "tmux.new", "build dashboard shell command", commandErr)
 			}

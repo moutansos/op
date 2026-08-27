@@ -217,6 +217,25 @@ func TestPowerShellUsesNativeInteractiveArguments(t *testing.T) {
 	}
 }
 
+func TestPowerShellExeUsesNativeInteractiveArguments(t *testing.T) {
+	for _, shell := range []string{"pwsh.exe", "/usr/bin/pwsh.exe", `'/mnt/c/Program Files/PowerShell/7/pwsh.exe'`} {
+		t.Run(shell, func(t *testing.T) {
+			runner := &fakeRunner{}
+			launcher := newLauncher(t, runner, processrunner.Options{PreferredShell: shell})
+			if err := launcher.LaunchNvim(context.Background(), "/repos/project"); err != nil {
+				t.Fatalf("LaunchNvim() error = %v", err)
+			}
+			if len(runner.commands) != 1 {
+				t.Fatalf("commands = %#v", runner.commands)
+			}
+			got := runner.commands[0]
+			if len(got.Args) < 2 || got.Args[len(got.Args)-3] != "-NoExit" || got.Args[len(got.Args)-2] != "-Command" || got.Args[len(got.Args)-1] != "nvim ." {
+				t.Fatalf("args = %#v", got.Args)
+			}
+		})
+	}
+}
+
 func TestDirectCustomCommandRejectsShellOperators(t *testing.T) {
 	runner := &fakeRunner{}
 	launcher := newLauncher(t, runner, processrunner.Options{

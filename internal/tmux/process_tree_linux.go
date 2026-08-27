@@ -92,7 +92,7 @@ func commandLineMatches(actual, expected []string) bool {
 	if len(actual) < len(expected) || len(expected) == 0 {
 		return false
 	}
-	if filepath.Base(actual[0]) != filepath.Base(expected[0]) {
+	if commandBaseName(actual[0]) != commandBaseName(expected[0]) {
 		return false
 	}
 	for index := 1; index < len(expected); index++ {

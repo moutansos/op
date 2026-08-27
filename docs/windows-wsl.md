@@ -72,6 +72,16 @@ $env:OP_API_TOKEN = 'replace-me'
 op.exe projects --json
 ```
 
+## Preferred Shell
+
+Set `preferredShell` to `pwsh.exe` (or `powershell.exe`) to use Windows PowerShell inside
+WSL tmux panes, as the previous PowerShell implementation did. WSL interop often reports
+the pane command as `init` rather than `pwsh.exe`; startup verification accepts that.
+
+The Linux dashboard TUI cannot execute inside Windows PowerShell, so a `pwsh.exe`
+preferred shell still wraps the dashboard with `sh`. Project editor wrapping and the
+bottom shell pane continue to use `pwsh.exe`.
+
 ## Paths And Terminal Behavior
 
 The current Windows working directory is supplied with WSL's documented `--cd` option. This keeps
