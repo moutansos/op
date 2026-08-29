@@ -214,7 +214,7 @@ func (d *Detector) classifyPane(
 		changedAt = now
 	case previous.digest != digest:
 		changedAt = now
-		leftInitial = true
+		leftInitial = previous.leftInitial || now.Sub(previous.changedAt) >= d.quietAfter
 	default:
 		changedAt = previous.changedAt
 		leftInitial = previous.leftInitial

@@ -60,6 +60,16 @@ const opencodeIdleScreen = `
    ⬝⬝⬝⬝⬝⬝⬝⬝                         32.4K (3%) · $0.43  ctrl+p commands
 `
 
+const grokFreshScreen = `
+ Session 01a04bc3-6af2-73c3-84ec-d53dcb6c513d — use /dashboard to switch between sessions
+
+ ╭────────────────────────────────────────────────────────╮
+ │ ❯                                                      │
+ ╰──────────────────────────── Grok 4.6 · always-approve ─╯
+
+ Shift+Tab:mode  │  Ctrl+x:shortcuts
+`
+
 func claudePane() Pane {
 	return Pane{
 		PaneID:     "%46",
@@ -77,6 +87,16 @@ func opencodePane() Pane {
 		RootPID:    425274,
 		Command:    "opencode",
 		Foreground: Foreground{PID: 539062, Command: "opencode", Args: []string{"opencode", "attach"}, Valid: true},
+	}
+}
+
+func grokPane() Pane {
+	return Pane{
+		PaneID:     "%9",
+		WindowName: "grok",
+		RootPID:    600000,
+		Command:    "grok",
+		Foreground: Foreground{PID: 600001, Command: "grok", Args: []string{"grok"}, Valid: true},
 	}
 }
 
@@ -115,6 +135,21 @@ func TestNewScreenQuietPromptIsIdle(t *testing.T) {
 	pane := claudePane()
 
 	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(5*time.Second), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityIdle {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityIdle)
+	}
+}
+
+func TestGrokFreshPromptIsIdleAfterStartupRepaint(t *testing.T) {
+	detector := newTestDetector(t)
+	capturer := newScreens(map[string][]string{"%9": {"Starting Grok...", grokFreshScreen, grokFreshScreen}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := grokPane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(200*time.Millisecond), []Pane{pane}, capturer)
 	states := detector.Classify(context.Background(), start.Add(5*time.Second), []Pane{pane}, capturer)
 
 	if states[0].Activity != domain.AgentActivityIdle {

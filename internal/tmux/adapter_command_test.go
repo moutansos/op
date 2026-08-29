@@ -5,6 +5,31 @@ import (
 	"testing"
 )
 
+func TestParseSessionRecords(t *testing.T) {
+	output := "$1\t0\top\n$2\t2\tname\twith-tab\n"
+	sessions, err := parseSessionRecords(output)
+	if err != nil {
+		t.Fatalf("parseSessionRecords() error = %v", err)
+	}
+	if len(sessions) != 2 || sessions[0] != (sessionState{ID: "$1", Name: "op"}) || sessions[1] != (sessionState{ID: "$2", Name: "name\twith-tab", Attached: true}) {
+		t.Fatalf("sessions = %+v", sessions)
+	}
+
+	for _, output := range []string{"$1\t\top", "$1\t0", "bad\t0\top", "$1\t0\top\n$1\t1\top"} {
+		if sessions, err := parseSessionRecords(output); err == nil {
+			t.Fatalf("parseSessionRecords(%q) = %+v, want error", output, sessions)
+		}
+	}
+}
+
+func TestSessionRecordArgsRequestsEveryFieldInOneQuery(t *testing.T) {
+	got := strings.Join(sessionRecordArgs(), " ")
+	want := "list-sessions -F #{session_id}\t#{session_attached}\t#{session_name}"
+	if got != want {
+		t.Fatalf("sessionRecordArgs = %q, want %q", got, want)
+	}
+}
+
 func TestPaneRecordArgsRequestsEveryFieldInOneQuery(t *testing.T) {
 	got := strings.Join(paneRecordArgs("@6"), " ")
 	want := "list-panes -t @6 -F " + strings.Join([]string{

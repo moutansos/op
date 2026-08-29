@@ -86,7 +86,7 @@ func newReadOnlyCommandClient(ctx context.Context, config ManagerConfig) (tmuxCl
 }
 
 func (c *commandClient) Session(ctx context.Context, name string) (*sessionState, error) {
-	ids, err := c.raw.listIDs(ctx, validateSessionID, "list-sessions", "-F", "#{session_id}")
+	output, err := c.raw.run(ctx, sessionRecordArgs()...)
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -94,21 +94,49 @@ func (c *commandClient) Session(ctx context.Context, name string) (*sessionState
 		}
 		return nil, err
 	}
-	for _, id := range ids {
-		sessionName, err := c.raw.field(ctx, id, "session_name")
-		if err != nil {
-			return nil, err
+	sessions, err := parseSessionRecords(output)
+	if err != nil {
+		return nil, err
+	}
+	for _, session := range sessions {
+		if session.Name == name {
+			return &session, nil
 		}
-		if sessionName != name {
-			continue
-		}
-		attached, err := c.raw.intField(ctx, id, "session_attached", 0, int(^uint(0)>>1))
-		if err != nil {
-			return nil, err
-		}
-		return &sessionState{ID: id, Name: sessionName, Attached: attached > 0}, nil
 	}
 	return nil, nil
+}
+
+func sessionRecordArgs() []string {
+	return []string{"list-sessions", "-F", strings.Join([]string{"#{session_id}", "#{session_attached}", "#{session_name}"}, paneRecordSeparator)}
+}
+
+func parseSessionRecords(output string) ([]sessionState, error) {
+	output = trimOneLineEnding(output)
+	if output == "" {
+		return []sessionState{}, nil
+	}
+	lines := strings.Split(output, "\n")
+	result := make([]sessionState, 0, len(lines))
+	seen := make(map[string]struct{}, len(lines))
+	for _, line := range lines {
+		values := strings.SplitN(strings.TrimSuffix(line, "\r"), paneRecordSeparator, 3)
+		if len(values) != 3 {
+			return nil, fmt.Errorf("tmux returned malformed session record %q", line)
+		}
+		if err := validateSessionID(values[0]); err != nil {
+			return nil, fmt.Errorf("tmux returned malformed identity %q: %w", values[0], err)
+		}
+		attached, err := parseIntField("session_attached", values[1], 0, int(^uint(0)>>1))
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := seen[values[0]]; duplicate {
+			return nil, fmt.Errorf("tmux returned duplicate identity %q", values[0])
+		}
+		seen[values[0]] = struct{}{}
+		result = append(result, sessionState{ID: values[0], Name: values[2], Attached: attached > 0})
+	}
+	return result, nil
 }
 
 func (c *commandClient) CreateSession(ctx context.Context, name, directory, shellCommand string) error {
