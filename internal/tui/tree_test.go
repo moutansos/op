@@ -97,6 +97,29 @@ func TestRenderTmuxShowsApprovalQuestion(t *testing.T) {
 	}
 }
 
+func TestRenderTmuxShowsPermissionRequiredStatus(t *testing.T) {
+	model := treeModel(
+		[]domain.PaneAgentState{{
+			PaneID: "%6", AgentName: "opencode",
+			Activity:     domain.AgentActivityPermissionRequired,
+			QuietSeconds: 7,
+			Detail:       "┃    ← Access external directory ~",
+		}},
+		nil,
+	)
+	output := model.renderTmux(90, 0)
+
+	if !strings.Contains(output, "permission 7s") {
+		t.Fatalf("tree output missing the permission badge:\n%s", output)
+	}
+	if !strings.Contains(output, "↳ ← Access external directory ~") {
+		t.Fatalf("tree output should show the permission detail:\n%s", output)
+	}
+	if !strings.Contains(output, "1 waiting") {
+		t.Fatalf("tree header missing the waiting count:\n%s", output)
+	}
+}
+
 // An ordinary input prompt matches the agent's idle footer, which adds nothing
 // the badge has not already communicated.
 func TestRenderTmuxOmitsDetailForPlainInputPrompts(t *testing.T) {
@@ -140,12 +163,13 @@ func TestAgentsNeedingAttentionCountsOnlyBlockedAgents(t *testing.T) {
 	model := treeModel([]domain.PaneAgentState{
 		{PaneID: "%1", Activity: domain.AgentActivityWorking},
 		{PaneID: "%2", Activity: domain.AgentActivityAwaitingInput},
+		{PaneID: "%5", Activity: domain.AgentActivityPermissionRequired},
 		{PaneID: "%3", Activity: domain.AgentActivityAwaitingApproval},
 		{PaneID: "%4", Activity: domain.AgentActivityIdle},
 	}, nil)
 
-	if got := model.agentsNeedingAttention(); got != 2 {
-		t.Fatalf("agentsNeedingAttention() = %d, want 2", got)
+	if got := model.agentsNeedingAttention(); got != 3 {
+		t.Fatalf("agentsNeedingAttention() = %d, want 3", got)
 	}
 }
 

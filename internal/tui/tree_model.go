@@ -117,6 +117,9 @@ func preserveStartingAgents(current, cached []domain.PaneAgentState) []domain.Pa
 			continue
 		}
 		if previous, ok := byPane[agent.PaneID]; ok {
+			if previous.ForegroundPID > 0 && agent.ForegroundPID > 0 && previous.ForegroundPID != agent.ForegroundPID {
+				continue
+			}
 			current[index] = previous
 		}
 	}

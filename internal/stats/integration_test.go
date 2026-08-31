@@ -94,6 +94,7 @@ func TestIntegrationAgentDetection(t *testing.T) {
 			domain.AgentActivityStarting,
 			domain.AgentActivityWorking,
 			domain.AgentActivityAwaitingInput,
+			domain.AgentActivityPermissionRequired,
 			domain.AgentActivityAwaitingApproval,
 			domain.AgentActivityIdle:
 		default:

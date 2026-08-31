@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,62 @@ const claudeIdleScreen = `
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
 `
 
+const claudeFreshSessionScreen = `
+✻ Welcome to Claude Code!
+
+ Tips for getting started:
+  1. Run /init to create a CLAUDE.md
+  2. Use /resume to pick up a previous conversation
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────
+❯
+────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`
+
+const claudeFreshSessionScreenRepaint = `
+✻ Welcome to Claude Code!
+
+ Tips for getting started:
+  1. Run /init to create a CLAUDE.md
+  2. Use /resume to pick up a previous conversation
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────
+❯
+────────────────────────────────
+  ⏵⏵ plan mode on (shift+tab to cycle) · ← for agents
+`
+
 const opencodeBusyScreen = `
      ⠴ Thinking
      ▣  Build · Claude Opus 5
@@ -58,6 +115,34 @@ const opencodeIdleScreen = `
      ▣  Build · Claude Opus 5
   ┃
    ⬝⬝⬝⬝⬝⬝⬝⬝                         32.4K (3%) · $0.43  ctrl+p commands
+`
+
+const opencodeFreshWindowScreen = `
+
+
+
+
+
+
+
+
+
+
+                                                                         ▄
+                                        █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                                        █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                                        ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+                      ┃
+                      ┃  Ask anything... "What is the tech stack of this project?"
+                      ┃
+                      ┃  Build · GPT-5.4 GitHub Copilot · high
+                      ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                      tab agents  ctrl+p commands
+
+
+
+                              ● Tip Press ctrl+f in the session list to pin one at the top
 `
 
 const grokFreshScreen = `
@@ -182,6 +267,41 @@ func TestWelcomeScreenIsIdleEvenAfterOutput(t *testing.T) {
 	}
 }
 
+func TestClaudeFreshSessionOutsideTailWindowIsIdle(t *testing.T) {
+	detector := newTestDetector(t)
+	capturer := newScreens(map[string][]string{"%46": {claudeFreshSessionScreen, claudeFreshSessionScreen}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := claudePane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(5*time.Second), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityIdle {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityIdle)
+	}
+	if states[0].Detail == "" || (!strings.Contains(states[0].Detail, "Welcome to Claude Code") && !strings.Contains(states[0].Detail, "Tips for getting started")) {
+		t.Fatalf("detail = %q, want the fresh-session marker", states[0].Detail)
+	}
+}
+
+func TestClaudeFreshSessionStartupRepaintStaysIdle(t *testing.T) {
+	detector := newTestDetector(t)
+	capturer := newScreens(map[string][]string{"%46": {claudeFreshSessionScreen, claudeFreshSessionScreenRepaint, claudeFreshSessionScreenRepaint}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := claudePane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(200*time.Millisecond), []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(5*time.Second), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityIdle {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityIdle)
+	}
+	if states[0].QuietSeconds != 5 {
+		t.Fatalf("quiet seconds = %d, want 5", states[0].QuietSeconds)
+	}
+}
+
 func TestQuietPromptBecomesAwaitingInput(t *testing.T) {
 	detector := newTestDetector(t)
 	capturer := newScreens(map[string][]string{"%46": {claudeIdleScreen, claudeIdleScreen + "\nworking", claudeIdleScreen, claudeIdleScreen}})
@@ -268,6 +388,54 @@ func TestOpencodeQuietPromptAfterWorkIsAwaitingInput(t *testing.T) {
 	}
 }
 
+func TestOpencodeFreshWindowAfterSessionResetsToIdle(t *testing.T) {
+	detector := newTestDetector(t)
+	capturer := newScreens(map[string][]string{"%6": {opencodeIdleScreen, opencodeBusyScreen, opencodeFreshWindowScreen, opencodeFreshWindowScreen}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := opencodePane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(time.Second), []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(2*time.Second), []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(6*time.Second), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityIdle {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityIdle)
+	}
+	if states[0].Detail == "" || !strings.Contains(states[0].Detail, "Ask anything") {
+		t.Fatalf("detail = %q, want the fresh-window marker", states[0].Detail)
+	}
+}
+
+func TestOpencodeFreshWindowAfterPermissionResetsToIdle(t *testing.T) {
+	detector := newTestDetector(t)
+	permission := `
+  ┃
+  ┃  △ Permission required
+  ┃    ← Access external directory ~
+  ┃
+  ┃  Patterns
+  ┃
+  ┃  - /home/ben/*
+  ┃
+  ┃   Allow once   Allow always   Reject
+  ┃
+  ┃  ctrl+f fullscreen  ⇆ select  enter confirm
+`
+	capturer := newScreens(map[string][]string{"%6": {opencodeBusyScreen, permission, opencodeFreshWindowScreen, opencodeFreshWindowScreen}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := opencodePane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(200*time.Millisecond), []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(time.Second), []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(5*time.Second), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityIdle {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityIdle)
+	}
+}
+
 // An approval dialog blocks unconditionally, so it must be reported on the very
 // frame it appears rather than waiting for the pane to settle.
 func TestApprovalIsReportedWithoutWaitingForQuiescence(t *testing.T) {
@@ -285,6 +453,69 @@ func TestApprovalIsReportedWithoutWaitingForQuiescence(t *testing.T) {
 	}
 	if states[0].Detail != "Do you want to proceed?" {
 		t.Fatalf("detail = %q, want the matched dialog line", states[0].Detail)
+	}
+}
+
+func TestPermissionPromptIsReportedWithoutWaitingForQuiescence(t *testing.T) {
+	detector := newTestDetector(t)
+	permission := `
+  ┃
+  ┃  △ Permission required
+  ┃    ← Access external directory ~
+  ┃
+  ┃  Patterns
+  ┃
+  ┃  - /home/ben/*
+  ┃
+  ┃   Allow once   Allow always   Reject
+  ┃
+  ┃  ctrl+f fullscreen  ⇆ select  enter confirm
+`
+	capturer := newScreens(map[string][]string{"%6": {opencodeBusyScreen, permission}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := opencodePane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(200*time.Millisecond), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityPermissionRequired {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityPermissionRequired)
+	}
+	if states[0].Detail != "┃    ← Access external directory ~" {
+		t.Fatalf("detail = %q, want the matched permission line", states[0].Detail)
+	}
+}
+
+func TestStalePermissionScrollbackDoesNotOverrideCurrentInputPrompt(t *testing.T) {
+	detector := newTestDetector(t)
+	permission := `
+  ┃
+  ┃  △ Permission required
+  ┃    ← Access external directory ~
+  ┃
+  ┃  Patterns
+  ┃
+  ┃  - /home/ben/*
+  ┃
+  ┃   Allow once   Allow always   Reject
+  ┃
+  ┃  ctrl+f fullscreen  ⇆ select  enter confirm
+`
+	settled := permission + "\n" + opencodeIdleScreen
+	capturer := newScreens(map[string][]string{"%6": {opencodeIdleScreen, opencodeBusyScreen, settled, settled}})
+	start := time.Unix(1_700_000_000, 0)
+	pane := opencodePane()
+
+	detector.Classify(context.Background(), start, []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(time.Second), []Pane{pane}, capturer)
+	detector.Classify(context.Background(), start.Add(2*time.Second), []Pane{pane}, capturer)
+	states := detector.Classify(context.Background(), start.Add(6*time.Second), []Pane{pane}, capturer)
+
+	if states[0].Activity != domain.AgentActivityAwaitingInput {
+		t.Fatalf("activity = %q, want %q", states[0].Activity, domain.AgentActivityAwaitingInput)
+	}
+	if states[0].Detail != "⬝⬝⬝⬝⬝⬝⬝⬝                         32.4K (3%) · $0.43  ctrl+p commands" {
+		t.Fatalf("detail = %q, want the current input footer", states[0].Detail)
 	}
 }
 

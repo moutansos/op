@@ -178,8 +178,11 @@ const (
 	// AgentActivityAwaitingInput means the agent has gone quiet on a prompt and
 	// is waiting for the operator to type something.
 	AgentActivityAwaitingInput AgentActivity = "awaiting_input"
+	// AgentActivityPermissionRequired means the agent is blocked on an explicit
+	// permission prompt, such as access outside the workspace.
+	AgentActivityPermissionRequired AgentActivity = "permission_required"
 	// AgentActivityAwaitingApproval means the agent is blocked on an explicit
-	// confirmation dialog, such as a tool-use or permission request.
+	// confirmation dialog, such as a tool-use confirmation.
 	AgentActivityAwaitingApproval AgentActivity = "awaiting_approval"
 	// AgentActivityIdle means the agent has been quiet long enough that it is
 	// unlikely to be mid-task, but no prompt was recognized.
@@ -189,7 +192,7 @@ const (
 // NeedsAttention reports whether the activity represents an agent that has
 // stopped making progress and is blocked on the operator.
 func (a AgentActivity) NeedsAttention() bool {
-	return a == AgentActivityAwaitingInput || a == AgentActivityAwaitingApproval
+	return a == AgentActivityAwaitingInput || a == AgentActivityPermissionRequired || a == AgentActivityAwaitingApproval
 }
 
 // String renders the activity for display.
@@ -201,6 +204,8 @@ func (a AgentActivity) String() string {
 		return "working"
 	case AgentActivityAwaitingInput:
 		return "awaiting input"
+	case AgentActivityPermissionRequired:
+		return "permission required"
 	case AgentActivityAwaitingApproval:
 		return "awaiting approval"
 	case AgentActivityIdle:

@@ -9,13 +9,15 @@ import (
 )
 
 var (
-	waitingColor  = lipgloss.AdaptiveColor{Light: "#B45309", Dark: "#FBBF24"}
-	approvalColor = lipgloss.AdaptiveColor{Light: "#A51D2D", Dark: "#FF8A8A"}
-	workingColor  = lipgloss.AdaptiveColor{Light: "#166534", Dark: "#6EE7A0"}
+	waitingColor    = lipgloss.AdaptiveColor{Light: "#B45309", Dark: "#FBBF24"}
+	permissionColor = lipgloss.AdaptiveColor{Light: "#7C3AED", Dark: "#C4B5FD"}
+	approvalColor   = lipgloss.AdaptiveColor{Light: "#A51D2D", Dark: "#FF8A8A"}
+	workingColor    = lipgloss.AdaptiveColor{Light: "#166534", Dark: "#6EE7A0"}
 
-	waitingStyle  = lipgloss.NewStyle().Bold(true).Foreground(waitingColor)
-	approvalStyle = lipgloss.NewStyle().Bold(true).Foreground(approvalColor)
-	workingStyle  = lipgloss.NewStyle().Foreground(workingColor)
+	waitingStyle    = lipgloss.NewStyle().Bold(true).Foreground(waitingColor)
+	permissionStyle = lipgloss.NewStyle().Bold(true).Foreground(permissionColor)
+	approvalStyle   = lipgloss.NewStyle().Bold(true).Foreground(approvalColor)
+	workingStyle    = lipgloss.NewStyle().Foreground(workingColor)
 )
 
 // agentsByPane indexes the latest agent classifications by pane.
@@ -283,18 +285,25 @@ func paneCommandLabel(pane domain.TmuxPane, process domain.PaneProcessStats) str
 }
 
 // paneDetailLine surfaces the question an agent is blocked on, so the operator
-// can decide without switching to the pane. Only approvals earn a line: the text
-// matched for an ordinary input prompt is the agent's idle footer, which says
-// nothing the badge has not already said.
+// can decide without switching to the pane. Input prompts do not earn a line:
+// the text matched there is the agent's idle footer, which says nothing the
+// badge has not already said.
 func paneDetailLine(agent domain.PaneAgentState) string {
-	if agent.Activity != domain.AgentActivityAwaitingApproval || agent.Detail == "" {
+	switch agent.Activity {
+	case domain.AgentActivityPermissionRequired, domain.AgentActivityAwaitingApproval:
+	default:
 		return ""
 	}
-	return "↳ " + collapseSpaces(agent.Detail)
+	if agent.Detail == "" {
+		return ""
+	}
+	return "↳ " + collapseSpaces(strings.TrimLeft(agent.Detail, " \t│┃"))
 }
 
 func agentBadge(agent domain.PaneAgentState) (string, lipgloss.Style) {
 	switch agent.Activity {
+	case domain.AgentActivityPermissionRequired:
+		return "△ permission " + formatDuration(agent.QuietSeconds), permissionStyle
 	case domain.AgentActivityAwaitingApproval:
 		return "▲ approve " + formatDuration(agent.QuietSeconds), approvalStyle
 	case domain.AgentActivityAwaitingInput:

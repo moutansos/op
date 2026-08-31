@@ -59,10 +59,17 @@ type paneObservation struct {
 	foregroundPID int32
 	digest        uint64
 	changedAt     time.Time
+	newScreen     bool
 	// leftInitial is true once this agent run has painted something other than
 	// its first screen. The first settled screen is the new-session chrome, and
 	// that must not be reported as waiting.
 	leftInitial bool
+}
+
+type lineMatch struct {
+	line  string
+	start int
+	ok    bool
 }
 
 // Detector classifies agent panes across successive samples. It retains the
@@ -200,6 +207,8 @@ func (d *Detector) classifyPane(
 	}
 
 	digest := screenDigest(screen)
+	tail := trailingLines(screen, d.scanLines)
+	newScreen := matchVisibleNewScreen(definition.newScreen, tail, screen)
 	previous, hadPrevious := d.observed[pane.PaneID]
 	// A different foreground process is a different agent run, even in the same
 	// pane, so its predecessor's quiescence says nothing about it.
@@ -212,6 +221,10 @@ func (d *Detector) classifyPane(
 	switch {
 	case !hadPrevious:
 		changedAt = now
+	case previous.newScreen && newScreen.ok && !previous.leftInitial && previous.digest != digest:
+		// Fresh-session chrome repaints during startup without meaning that the
+		// operator has asked a question yet.
+		changedAt = previous.changedAt
 	case previous.digest != digest:
 		changedAt = now
 		leftInitial = previous.leftInitial || now.Sub(previous.changedAt) >= d.quietAfter
@@ -223,6 +236,7 @@ func (d *Detector) classifyPane(
 		foregroundPID: pane.Foreground.PID,
 		digest:        digest,
 		changedAt:     changedAt,
+		newScreen:     newScreen.ok,
 		leftInitial:   leftInitial,
 	}
 
@@ -233,20 +247,20 @@ func (d *Detector) classifyPane(
 	state.ChangedAt = changedAt
 	state.QuietSeconds = uint64(quiet / time.Second)
 
-	tail := trailingLines(screen, d.scanLines)
-	state.Activity, state.Detail = classify(definition, tail, quiet, d.quietAfter, d.idleAfter, hadPrevious, leftInitial)
+	state.Activity, state.Detail = classify(definition, tail, newScreen, quiet, d.quietAfter, d.idleAfter, hadPrevious, leftInitial)
 	return state
 }
 
 // classify applies the decision order that keeps false "waiting" reports rare.
 //
-// A confirmation dialog is checked first because it blocks unconditionally, even
-// on the frame it appears. A busy affordance is checked next because an agent
-// that still offers "esc to interrupt" is by its own account mid-task, which
-// overrides a screen that merely happens to be still. Only then does quiescence
-// matter, and a quiet pane is reported as blocked solely when a prompt is
-// recognized: a slow tool call that prints nothing is quiet too, and calling
-// that "awaiting input" would be the one failure mode worth avoiding.
+// A permission prompt or confirmation dialog is checked first because it blocks
+// unconditionally, even on the frame it appears. A busy affordance is checked
+// next because an agent that still offers "esc to interrupt" is by its own
+// account mid-task, which overrides a screen that merely happens to be still.
+// Only then does quiescence matter, and a quiet pane is reported as blocked
+// solely when a prompt is recognized: a slow tool call that prints nothing is
+// quiet too, and calling that "awaiting input" would be the one failure mode
+// worth avoiding.
 //
 // The agent's first settled screen is the new-session chrome. That screen
 // always has a prompt, but the operator has not been asked anything yet, so it
@@ -254,15 +268,28 @@ func (d *Detector) classifyPane(
 func classify(
 	definition compiledDefinition,
 	tail string,
+	newScreen lineMatch,
 	quiet, quietAfter, idleAfter time.Duration,
 	hadBaseline bool,
 	leftInitial bool,
 ) (domain.AgentActivity, string) {
-	if line, ok := matchLine(definition.approval, tail); ok {
-		return domain.AgentActivityAwaitingApproval, line
+	permission := matchLine(definition.permission, tail)
+	permissionDetail := matchPermissionDetail(definition.permission, tail)
+	if !permissionDetail.ok {
+		permissionDetail = permission
 	}
-	if line, ok := matchLine(definition.busy, tail); ok {
-		return domain.AgentActivityWorking, line
+	approval := matchLine(definition.approval, tail)
+	busy := matchLine(definition.busy, tail)
+	prompt := matchLine(definition.prompt, tail)
+
+	if permission.ok && permission.start > maxLineStart(prompt, newScreen) {
+		return domain.AgentActivityPermissionRequired, permissionDetail.line
+	}
+	if approval.ok && approval.start > maxLineStart(permission, prompt, newScreen) {
+		return domain.AgentActivityAwaitingApproval, approval.line
+	}
+	if busy.ok {
+		return domain.AgentActivityWorking, busy.line
 	}
 	if !hadBaseline {
 		return domain.AgentActivityStarting, ""
@@ -270,14 +297,14 @@ func classify(
 	if quiet < quietAfter {
 		return domain.AgentActivityWorking, ""
 	}
-	if line, ok := matchLine(definition.newScreen, tail); ok {
-		return domain.AgentActivityIdle, line
+	if newScreen.ok {
+		return domain.AgentActivityIdle, newScreen.line
 	}
-	if line, ok := matchLine(definition.prompt, tail); ok {
+	if prompt.ok {
 		if !leftInitial {
-			return domain.AgentActivityIdle, line
+			return domain.AgentActivityIdle, prompt.line
 		}
-		return domain.AgentActivityAwaitingInput, line
+		return domain.AgentActivityAwaitingInput, prompt.line
 	}
 	if quiet >= idleAfter {
 		return domain.AgentActivityIdle, ""
@@ -285,13 +312,34 @@ func classify(
 	return domain.AgentActivityWorking, ""
 }
 
-func matchLine(patterns []*regexp.Regexp, text string) (string, bool) {
-	if text == "" {
-		return "", false
+// matchVisibleNewScreen recognizes unused welcome chrome anywhere in the
+// visible pane, not just near the footer. When the marker is above the trailing
+// scan window, keep its start before all tail matches so current prompts,
+// approvals, and permission dialogs still win precedence.
+func matchVisibleNewScreen(patterns []*regexp.Regexp, tail, screen string) lineMatch {
+	match := matchLine(patterns, tail)
+	if match.ok {
+		return match
 	}
+	match = matchLine(patterns, screen)
+	if match.ok {
+		match.start = -1
+	}
+	return match
+}
+
+func matchLine(patterns []*regexp.Regexp, text string) lineMatch {
+	if text == "" {
+		return lineMatch{}
+	}
+	best := lineMatch{start: -1}
 	for _, pattern := range patterns {
-		location := pattern.FindStringIndex(text)
-		if location == nil {
+		locations := pattern.FindAllStringIndex(text, -1)
+		if len(locations) == 0 {
+			continue
+		}
+		location := locations[len(locations)-1]
+		if location[0] <= best.start {
 			continue
 		}
 		start := strings.LastIndexByte(text[:location[0]], '\n') + 1
@@ -301,9 +349,45 @@ func matchLine(patterns []*regexp.Regexp, text string) (string, bool) {
 		} else {
 			end += location[0]
 		}
-		return strings.TrimSpace(text[start:end]), true
+		best = lineMatch{line: strings.TrimSpace(text[start:end]), start: location[0], ok: true}
 	}
-	return "", false
+	return best
+}
+
+func maxLineStart(matches ...lineMatch) int {
+	best := -1
+	for _, match := range matches {
+		if match.ok && match.start > best {
+			best = match.start
+		}
+	}
+	return best
+}
+
+func matchPermissionDetail(patterns []*regexp.Regexp, text string) lineMatch {
+	best := lineMatch{start: -1}
+	for _, pattern := range patterns {
+		if pattern == nil {
+			continue
+		}
+		for _, location := range pattern.FindAllStringIndex(text, -1) {
+			start := strings.LastIndexByte(text[:location[0]], '\n') + 1
+			end := strings.IndexByte(text[location[0]:], '\n')
+			if end < 0 {
+				end = len(text)
+			} else {
+				end += location[0]
+			}
+			line := strings.TrimSpace(text[start:end])
+			if strings.Contains(line, "←") {
+				return lineMatch{line: line, start: location[0], ok: true}
+			}
+			if location[0] > best.start {
+				best = lineMatch{line: line, start: location[0], ok: true}
+			}
+		}
+	}
+	return best
 }
 
 // screenDigest hashes a pane's rendered contents. Trailing whitespace and

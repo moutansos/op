@@ -65,10 +65,19 @@ func TestTreeModelStartsFromCachedAgentState(t *testing.T) {
 }
 
 func TestTreeModelKeepsCacheThroughFirstLiveBaseline(t *testing.T) {
-	cached := []domain.PaneAgentState{{PaneID: "%7", Activity: domain.AgentActivityAwaitingInput, QuietSeconds: 12}}
-	current := []domain.PaneAgentState{{PaneID: "%7", Activity: domain.AgentActivityStarting}}
+	cached := []domain.PaneAgentState{{PaneID: "%7", ForegroundPID: 123, Activity: domain.AgentActivityAwaitingInput, QuietSeconds: 12}}
+	current := []domain.PaneAgentState{{PaneID: "%7", ForegroundPID: 123, Activity: domain.AgentActivityStarting}}
 	got := preserveStartingAgents(current, cached)
 	if got[0].Activity != domain.AgentActivityAwaitingInput || got[0].QuietSeconds != 12 {
+		t.Fatalf("preserved agents = %+v", got)
+	}
+}
+
+func TestTreeModelDoesNotPreserveCacheAcrossFreshForegroundProcess(t *testing.T) {
+	cached := []domain.PaneAgentState{{PaneID: "%7", ForegroundPID: 123, Activity: domain.AgentActivityAwaitingInput, QuietSeconds: 12}}
+	current := []domain.PaneAgentState{{PaneID: "%7", ForegroundPID: 456, Activity: domain.AgentActivityStarting}}
+	got := preserveStartingAgents(current, cached)
+	if got[0].Activity != domain.AgentActivityStarting {
 		t.Fatalf("preserved agents = %+v", got)
 	}
 }

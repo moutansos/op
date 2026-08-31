@@ -326,10 +326,11 @@ consuming no CPU. Detection therefore works from two observations:
   recognized prompt or confirmation pattern is visible. An agent's first settled
   screen is its new-session chrome and is reported idle even when a prompt is showing.
 
-Panes are classified as `working`, `awaiting input`, `awaiting approval`, `idle`, `starting`, or
-`unknown`. Blocked agents are counted in the Tmux panel title and named on the status line, so they
-are visible in every layout. Approval prompts also show the question that is blocking. Clicking a
-waiting pane, or pressing `enter` while it is focused in the Tmux section, selects that pane.
+Panes are classified as `working`, `awaiting input`, `permission required`, `awaiting approval`,
+`idle`, `starting`, or `unknown`. Blocked agents are counted in the Tmux panel title and named on
+the status line, so they are visible in every layout. Permission and approval prompts also show the
+question that is blocking. Clicking a waiting pane, or pressing `enter` while it is focused in the
+Tmux section, selects that pane.
 
 Only panes whose foreground process matches a known agent are captured, so the number of `tmux`
 calls per refresh scales with the number of agents, not the number of panes.

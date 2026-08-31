@@ -52,12 +52,13 @@ type Definition struct {
 }
 
 type compiledDefinition struct {
-	name      string
-	match     map[string]struct{}
-	busy      []*regexp.Regexp
-	prompt    []*regexp.Regexp
-	approval  []*regexp.Regexp
-	newScreen []*regexp.Regexp
+	name       string
+	match      map[string]struct{}
+	busy       []*regexp.Regexp
+	prompt     []*regexp.Regexp
+	permission []*regexp.Regexp
+	approval   []*regexp.Regexp
+	newScreen  []*regexp.Regexp
 }
 
 // genericBusyPatterns are rendered by essentially every agent while it works.
@@ -89,6 +90,16 @@ var genericNewScreenPatterns = []string{
 	`(?i)\b\/help for help\b`,
 	`(?i)\bnew session\b`,
 	`(?i)\brecent sessions?\b`,
+	`(?is)\bask anything\b[\s\S]*\btab agents\b`,
+}
+
+// genericPermissionPatterns recognize hard permission prompts. They are checked
+// before generic approvals because the dashboard should distinguish a blocked
+// run that needs elevated access from one that only needs confirmation.
+var genericPermissionPatterns = []string{
+	`(?im)^\s*[│┃].*△\s+Permission required\s*$`,
+	`(?im)^\s*[│┃].*←\s+Access [^\n]+$`,
+	`(?im)^\s*[│┃]?\s*Allow once\s+Allow always\s+Reject\s*$`,
 }
 
 // genericApprovalPatterns recognize confirmation dialogs. Agents phrase these
@@ -184,6 +195,10 @@ func compile(definitions []Definition) ([]compiledDefinition, error) {
 		if err != nil {
 			return nil, err
 		}
+		permission, err := compilePatterns(name, "permissionPatterns", nil, genericPermissionPatterns)
+		if err != nil {
+			return nil, err
+		}
 		approval, err := compilePatterns(name, "approvalPatterns", definition.ApprovalPatterns, genericApprovalPatterns)
 		if err != nil {
 			return nil, err
@@ -194,12 +209,13 @@ func compile(definitions []Definition) ([]compiledDefinition, error) {
 		}
 
 		compiled = append(compiled, compiledDefinition{
-			name:      name,
-			match:     match,
-			busy:      busy,
-			prompt:    prompt,
-			approval:  approval,
-			newScreen: newScreen,
+			name:       name,
+			match:      match,
+			busy:       busy,
+			prompt:     prompt,
+			permission: permission,
+			approval:   approval,
+			newScreen:  newScreen,
 		})
 	}
 	return compiled, nil
