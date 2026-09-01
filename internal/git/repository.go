@@ -38,6 +38,11 @@ type Repository struct {
 	runner CommandRunner
 }
 
+type State struct {
+	Branch string
+	Git    domain.GitState
+}
+
 func NewRepository() *Repository {
 	return NewRepositoryWithRunner(execCommandRunner{})
 }
@@ -159,35 +164,37 @@ func (r *Repository) Init(ctx context.Context, path string) error {
 	return nil
 }
 
-// State reports worktree cleanliness using git's stable porcelain format.
-// This also works when .git is a file, as it is in linked worktrees.
-func (r *Repository) State(ctx context.Context, path string) (domain.GitState, error) {
+// State reports the current branch and worktree cleanliness using git's stable
+// porcelain format. This also works when .git is a file, as it is in linked
+// worktrees.
+func (r *Repository) State(ctx context.Context, path string) (State, error) {
 	const op = "git.status"
 	if err := validateAbsoluteDirectory(op, "path", path); err != nil {
-		return domain.GitStateUnknown, err
+		return State{Git: domain.GitStateUnknown}, err
 	}
 	isRoot, err := isWorktreeRoot(path)
 	if err != nil {
-		return domain.GitStateUnknown, domain.ResourceError(domain.ErrorCodeInternal, op, path, "inspect git worktree marker", err)
+		return State{Git: domain.GitStateUnknown}, domain.ResourceError(domain.ErrorCodeInternal, op, path, "inspect git worktree marker", err)
 	}
 	if !isRoot {
-		return domain.GitStateNotRepository, nil
+		return State{Git: domain.GitStateNotRepository}, nil
 	}
 	output, err := r.runner.Run(ctx, Command{
 		Directory: path,
 		Name:      "git",
-		Args:      []string{"status", "--porcelain"},
+		Args:      []string{"status", "--porcelain=v2", "--branch"},
 	})
 	if err != nil {
 		if isNotRepository(output, err) {
-			return domain.GitStateNotRepository, nil
+			return State{Git: domain.GitStateNotRepository}, nil
 		}
-		return domain.GitStateUnknown, commandError(ctx, op, path, "inspect repository state", output, err)
+		return State{Git: domain.GitStateUnknown}, commandError(ctx, op, path, "inspect repository state", output, err)
 	}
-	if len(output) == 0 {
-		return domain.GitStateClean, nil
+	branch, dirty := parseStatus(output)
+	if dirty {
+		return State{Branch: branch, Git: domain.GitStateDirty}, nil
 	}
-	return domain.GitStateDirty, nil
+	return State{Branch: branch, Git: domain.GitStateClean}, nil
 }
 
 // Pull updates a clean repository only when its current branch has an upstream.
@@ -267,6 +274,23 @@ func pullStatus(output []byte) (dirty, canPull bool) {
 		}
 	}
 	return dirty, hasCommit && hasBranch && hasUpstream
+}
+
+func parseStatus(output []byte) (branch string, dirty bool) {
+	for _, line := range strings.Split(string(output), "\n") {
+		switch {
+		case line == "":
+		case strings.HasPrefix(line, "# branch.head "):
+			head := strings.TrimPrefix(line, "# branch.head ")
+			if head != "" && head != "(detached)" {
+				branch = head
+			}
+		case strings.HasPrefix(line, "# "):
+		default:
+			dirty = true
+		}
+	}
+	return branch, dirty
 }
 
 type WorktreeOptions struct {

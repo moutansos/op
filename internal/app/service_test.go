@@ -558,17 +558,17 @@ func TestInsideSwitchRetainsSessionLockThroughExecution(t *testing.T) {
 func TestOpenProjectPullPolicyAndCleanliness(t *testing.T) {
 	tests := []struct {
 		name      string
-		state     domain.GitState
+		state     gitrepo.State
 		ctx       func() context.Context
 		enabled   bool
 		wantState int
 		wantPull  int
 	}{
-		{name: "clean and enabled", state: domain.GitStateClean, enabled: true, wantState: 1, wantPull: 1},
-		{name: "dirty", state: domain.GitStateDirty, enabled: true, wantState: 1},
-		{name: "raw folder", state: domain.GitStateNotRepository, enabled: true, wantState: 1},
-		{name: "globally disabled", state: domain.GitStateClean},
-		{name: "request disabled", state: domain.GitStateClean, enabled: true, ctx: func() context.Context { return app.WithoutRepositoryUpdates(context.Background()) }},
+		{name: "clean and enabled", state: gitrepo.State{Branch: "main", Git: domain.GitStateClean}, enabled: true, wantState: 1, wantPull: 1},
+		{name: "dirty", state: gitrepo.State{Branch: "main", Git: domain.GitStateDirty}, enabled: true, wantState: 1},
+		{name: "raw folder", state: gitrepo.State{Git: domain.GitStateNotRepository}, enabled: true, wantState: 1},
+		{name: "globally disabled", state: gitrepo.State{Branch: "main", Git: domain.GitStateClean}},
+		{name: "request disabled", state: gitrepo.State{Branch: "main", Git: domain.GitStateClean}, enabled: true, ctx: func() context.Context { return app.WithoutRepositoryUpdates(context.Background()) }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -807,13 +807,13 @@ func TestListProjectsComposesCatalogAndGitState(t *testing.T) {
 		{ID: "repo", Name: "repo", Path: "/repos/repo", Kind: domain.ProjectKindRepository, GitState: domain.GitStateUnknown},
 		{ID: "custom", Name: "custom", Path: "/custom", Kind: domain.ProjectKindCustomEntry, GitState: domain.GitStateUnknown},
 	}
-	repository := &fakeRepository{state: domain.GitStateDirty}
+	repository := &fakeRepository{state: gitrepo.State{Branch: "feature/filter", Git: domain.GitStateDirty}}
 	service := newTestService(t, testConfig(), dependencies(catalog, repository, &fakeLauncher{}, &fakeTmux{}, &fakeStats{}))
 	projects, err := service.ListProjects(context.Background())
 	if err != nil {
 		t.Fatalf("ListProjects() error = %v", err)
 	}
-	if projects[0].GitState != domain.GitStateDirty || projects[1].GitState != domain.GitStateUnknown || repository.stateCalls != 1 {
+	if projects[0].Branch != "feature/filter" || projects[0].GitState != domain.GitStateDirty || projects[1].GitState != domain.GitStateUnknown || repository.stateCalls != 1 {
 		t.Fatalf("ListProjects() = %+v; state calls = %d", projects, repository.stateCalls)
 	}
 }
@@ -954,7 +954,7 @@ type fakeRepository struct {
 	initPath        string
 	initCalls       int
 	initErr         error
-	state           domain.GitState
+	state           gitrepo.State
 	stateErr        error
 	stateCalls      int
 	pullCalls       int
@@ -985,7 +985,7 @@ func (f *fakeRepository) Init(_ context.Context, path string) error {
 	return f.initErr
 }
 
-func (f *fakeRepository) State(context.Context, string) (domain.GitState, error) {
+func (f *fakeRepository) State(context.Context, string) (gitrepo.State, error) {
 	f.mu.Lock()
 	f.stateCalls++
 	f.mu.Unlock()

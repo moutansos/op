@@ -35,6 +35,7 @@ type Project struct {
 	ID       string      `json:"id"`
 	Name     string      `json:"name"`
 	Path     string      `json:"path"`
+	Branch   string      `json:"branch,omitempty"`
 	Kind     ProjectKind `json:"kind"`
 	GitState GitState    `json:"gitState"`
 	Tags     []string    `json:"tags,omitempty"`

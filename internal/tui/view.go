@@ -10,13 +10,20 @@ import (
 )
 
 var (
-	accentColor = lipgloss.AdaptiveColor{Light: "#5A37B8", Dark: "#B9A3FF"}
+	accentColor = lipgloss.AdaptiveColor{Light: "#18794E", Dark: "#86EFAC"}
+	branchColor = lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#7DB7FF"}
+	cleanColor  = lipgloss.AdaptiveColor{Light: "#1F8A3B", Dark: "#5EDC84"}
+	dirtyColor  = lipgloss.AdaptiveColor{Light: "#C96A00", Dark: "#FFB24A"}
 	dimColor    = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#8A8A8A"}
 	errorColor  = lipgloss.AdaptiveColor{Light: "#A51D2D", Dark: "#FF6B7A"}
 
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
-	dimStyle   = lipgloss.NewStyle().Foreground(dimColor)
-	errorStyle = lipgloss.NewStyle().Foreground(errorColor)
+	titleStyle         = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
+	branchStyle        = lipgloss.NewStyle().Foreground(branchColor)
+	projectBranchStyle = branchStyle.Copy()
+	projectCleanStyle  = lipgloss.NewStyle().Foreground(cleanColor)
+	projectDirtyStyle  = lipgloss.NewStyle().Foreground(dirtyColor)
+	dimStyle           = lipgloss.NewStyle().Foreground(dimColor)
+	errorStyle         = lipgloss.NewStyle().Foreground(errorColor)
 )
 
 // View renders the dashboard for wide, stacked, tabbed, and minimum-size layouts.
@@ -53,7 +60,7 @@ func (m Model) openingView() string {
 	box := renderPanel("Opening Project", m.status, min(44, m.width-6), 0, true, nil)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box,
 		lipgloss.WithWhitespaceChars("·"),
-		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#D8D4E3", Dark: "#34303E"}),
+		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#D4E3D8", Dark: "#303E34"}),
 	)
 }
 
@@ -289,7 +296,7 @@ func (m Model) overlayView(_ string) string {
 	box := renderPanel(title, body, overlayWidth, 0, true, nil)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box,
 		lipgloss.WithWhitespaceChars("·"),
-		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#D8D4E3", Dark: "#34303E"}),
+		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#D4E3D8", Dark: "#303E34"}),
 	)
 }
 

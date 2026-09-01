@@ -204,7 +204,7 @@ func TestFilteringFocusAndResize(t *testing.T) {
 	service := &fakeService{}
 	model := testModel(service)
 	model = loadProjectsForTest(model,
-		domain.Project{ID: "one", Name: "api-server", Path: "/repos/api-server"},
+		domain.Project{ID: "one", Name: "api-server", Path: "/repos/api-server", Branch: "main", GitState: domain.GitStateClean},
 		domain.Project{ID: "two", Name: "dotfiles", Path: "/home/me/.config/nvim", Tags: []string{"cfg"}},
 	)
 
@@ -216,10 +216,16 @@ func TestFilteringFocusAndResize(t *testing.T) {
 	if got := len(model.projects.VisibleItems()); got != 2 {
 		t.Fatalf("visible projects after focus = %d, want 2", got)
 	}
+	if view := model.projects.View(); strings.Contains(view, "2 projects") {
+		t.Fatalf("project list rendered project count:\n%s", view)
+	}
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("cfg")})
 	model = updated.(Model)
 	if model.projects.FilterValue() != "cfg" {
 		t.Fatalf("filter value = %q, want cfg", model.projects.FilterValue())
+	}
+	if view := model.View(); !strings.Contains(view, "api-server") || !strings.Contains(view, "main") || !strings.Contains(view, "clean") || strings.Contains(view, "/repos/api-server") {
+		t.Fatalf("project row did not render inline branch/state without path:\n%s", view)
 	}
 
 	model.projects.SetFilterText("cfg")
@@ -273,6 +279,74 @@ func TestWindowFocusPreservesAppliedProjectFilter(t *testing.T) {
 	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyTab})
 	if model.section != statsSection {
 		t.Fatalf("section after escape and tab = %d, want stats", model.section)
+	}
+}
+
+func TestProjectFilterAcceptsNavigationLetters(t *testing.T) {
+	model := loadProjectsForTest(testModel(&fakeService{}),
+		domain.Project{ID: "one", Name: "project-jk", Path: "/repos/project-jk"},
+	)
+	model = updateTestModel(model, tea.FocusMsg{})
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+
+	if got := model.projects.FilterValue(); got != "jk" {
+		t.Fatalf("filter value = %q, want jk", got)
+	}
+}
+
+func TestProjectFilterKeepsSelectedRowAndMovesWithNavigationKeys(t *testing.T) {
+	model := loadProjectsForTest(testModel(&fakeService{}),
+		domain.Project{ID: "one", Name: "alpha-api", Path: "/repos/alpha-api"},
+		domain.Project{ID: "two", Name: "alpha-web", Path: "/repos/alpha-web"},
+		domain.Project{ID: "three", Name: "beta", Path: "/repos/beta"},
+	)
+
+	model = updateTestModel(model, tea.FocusMsg{})
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("alpha")})
+	model.projects.SetFilterText("alpha")
+	model.projects.SetFilterState(list.Filtering)
+
+	if selected := model.selectedProject(); selected == nil || selected.ID != "one" {
+		t.Fatalf("selected project while filtering = %+v, want one", selected)
+	}
+	if view := model.View(); !strings.Contains(view, "> alpha-api") {
+		t.Fatalf("filtered view did not show a selected row:\n%s", view)
+	}
+
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if selected := model.selectedProject(); selected == nil || selected.ID != "two" {
+		t.Fatalf("selected project after ctrl+n = %+v, want two", selected)
+	}
+	if view := model.View(); !strings.Contains(view, "> alpha-web") {
+		t.Fatalf("filtered view did not move selected row:\n%s", view)
+	}
+
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyCtrlP})
+	if selected := model.selectedProject(); selected == nil || selected.ID != "one" {
+		t.Fatalf("selected project after ctrl+p = %+v, want one", selected)
+	}
+}
+
+func TestSelectedProjectNameDoesNotWrapInsidePanel(t *testing.T) {
+	project := projectItem{project: domain.Project{ID: "one", Name: "<< nvim-config >>", Path: "/repos/nvim-config", Branch: "main", GitState: domain.GitStateClean}}
+	projects := list.New([]list.Item{project}, projectDelegate{}, 86, 20)
+	var row strings.Builder
+	projectDelegate{}.Render(&row, projects, 0, project)
+	if got := lipgloss.Width(row.String()); got >= projects.Width() {
+		t.Fatalf("selected row width = %d, want less than panel content width %d", got, projects.Width())
+	}
+	want := "> " + selectorSelectedStyle.Render(project.project.Name) + "  " + projectMetadata(project.project)
+	if got := row.String(); got != want {
+		t.Fatalf("selected row = %q, want name-only highlight %q", got, want)
+	}
+
+	model := loadProjectsForTest(testModel(&fakeService{}), project.project)
+	model = updateTestModel(model, tea.WindowSizeMsg{Width: 90, Height: 41})
+	model = updateTestModel(model, tea.FocusMsg{})
+
+	if view := model.View(); !strings.Contains(view, "> << nvim-config >>") {
+		t.Fatalf("selected project name wrapped unexpectedly:\n%s", view)
 	}
 }
 

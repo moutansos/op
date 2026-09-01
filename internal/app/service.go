@@ -44,7 +44,7 @@ type Catalog interface {
 type Repository interface {
 	Clone(context.Context, gitrepo.CloneOptions) (gitrepo.CloneResult, error)
 	Init(context.Context, string) error
-	State(context.Context, string) (domain.GitState, error)
+	State(context.Context, string) (gitrepo.State, error)
 	Pull(context.Context, string) error
 	CreateWorktree(context.Context, gitrepo.WorktreeOptions) (gitrepo.WorktreeResult, error)
 }
@@ -257,7 +257,8 @@ func (s *Service) ListProjects(ctx context.Context) ([]domain.Project, error) {
 		if err != nil {
 			return nil, typed(ctx, op, domain.ErrorCodeInternal, "inspect project state", err)
 		}
-		projects[i].GitState = state
+		projects[i].Branch = state.Branch
+		projects[i].GitState = state.Git
 	}
 	return projects, nil
 }
@@ -451,8 +452,9 @@ func (s *Service) openResolved(ctx context.Context, project domain.Project, prof
 		if err != nil {
 			return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeInternal, "inspect project before pull", err)
 		}
-		project.GitState = state
-		if state == domain.GitStateClean {
+		project.Branch = state.Branch
+		project.GitState = state.Git
+		if state.Git == domain.GitStateClean {
 			if err := s.repository.Pull(ctx, project.Path); err != nil {
 				return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeInternal, "pull project", err)
 			}

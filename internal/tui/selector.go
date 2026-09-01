@@ -12,12 +12,13 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/moutansos/op/internal/domain"
 )
 
 var (
-	selectorBorderColor  = lipgloss.AdaptiveColor{Light: "#B8AECF", Dark: "#514765"}
-	selectorSelectedText = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#211936"}
+	selectorBorderColor  = lipgloss.AdaptiveColor{Light: "#AECFB8", Dark: "#476551"}
+	selectorSelectedText = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#0F2418"}
 	selectorPanelStyle   = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(selectorBorderColor).
@@ -48,7 +49,7 @@ func SelectProject(ctx context.Context, title string, projects []domain.Project,
 	for index, project := range projects {
 		search := []string{project.Name, filepath.Base(project.Path), project.Path}
 		search = append(search, project.Tags...)
-		items[index] = Action{Name: project.Name, ID: project.ID, Description: project.Path, Search: strings.Join(search, " ")}
+		items[index] = Action{Name: project.Name, ID: project.ID, Description: projectMetadata(project), Search: strings.Join(search, " ")}
 		byID[project.ID] = project
 	}
 	selected, err := selectItem(ctx, newSelectorModelFor(title, "projects", items), input, output)
@@ -220,10 +221,10 @@ func (m selectorModel) actionRows(width int) []string {
 	default:
 		end := min(len(m.matches), m.offset+visible)
 		for index := m.offset; index < end; index++ {
-			name := truncate(m.matches[index].action.Name, max(1, width-2))
+			name := ansi.Truncate(m.matches[index].action.Name, max(1, width-2), "…")
 			if description := m.matches[index].action.Description; description != "" {
 				available := max(1, width-lipgloss.Width(name)-4)
-				name += "  " + dimStyle.Render(truncate(description, available))
+				name += "  " + ansi.Truncate(description, available, "…")
 			}
 			label := "  " + name
 			if index == m.cursor {

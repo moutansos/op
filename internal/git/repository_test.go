@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/moutansos/op/internal/domain"
@@ -222,10 +223,10 @@ func TestInitRejectsExistingDestinationBeforeGit(t *testing.T) {
 
 func TestStateUsesPorcelainForNormalAndLinkedWorktrees(t *testing.T) {
 	for name, output := range map[string][]byte{
-		"clean repository":   nil,
-		"dirty repository":   []byte(" M README.md\n"),
-		"linked worktree":    nil,
-		"untracked contents": []byte("?? new.txt\n"),
+		"clean repository":   []byte("# branch.oid abc123\n# branch.head main\n"),
+		"dirty repository":   []byte("# branch.oid abc123\n# branch.head main\n1 .M N... 100644 100644 100644 abc123 abc123 file.go\n"),
+		"linked worktree":    []byte("# branch.oid abc123\n# branch.head feature/worktree\n"),
+		"untracked contents": []byte("# branch.oid abc123\n# branch.head main\n? new.txt\n"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			runner := &fakeRunner{responses: []commandResponse{{output: output}}}
@@ -240,16 +241,20 @@ func TestStateUsesPorcelainForNormalAndLinkedWorktrees(t *testing.T) {
 				t.Fatalf("State() error = %v", err)
 			}
 			want := domain.GitStateClean
-			if len(output) != 0 {
+			wantBranch := "main"
+			if strings.Contains(name, "linked") {
+				wantBranch = "feature/worktree"
+			}
+			if strings.Contains(name, "dirty") || strings.Contains(name, "untracked") {
 				want = domain.GitStateDirty
 			}
-			if state != want {
-				t.Fatalf("State() = %q, want %q", state, want)
+			if state.Git != want || state.Branch != wantBranch {
+				t.Fatalf("State() = %#v, want branch=%q git=%q", state, wantBranch, want)
 			}
 			assertCommands(t, runner.commands, []gitrepo.Command{{
 				Directory: path,
 				Name:      "git",
-				Args:      []string{"status", "--porcelain"},
+				Args:      []string{"status", "--porcelain=v2", "--branch"},
 			}})
 		})
 	}
@@ -261,8 +266,8 @@ func TestStateRecognizesNonRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("State() error = %v", err)
 	}
-	if state != domain.GitStateNotRepository {
-		t.Fatalf("State() = %q, want %q", state, domain.GitStateNotRepository)
+	if state.Git != domain.GitStateNotRepository {
+		t.Fatalf("State() = %#v, want git=%q", state, domain.GitStateNotRepository)
 	}
 	if len(runner.commands) != 0 {
 		t.Fatalf("State() inspected an ancestor repository: %#v", runner.commands)

@@ -17,12 +17,12 @@ func updateSelector(model selectorModel, msg tea.Msg) selectorModel {
 
 func TestProjectSelectorSearchesNamePathAndTags(t *testing.T) {
 	projects := []domain.Project{
-		{ID: "one", Name: "api", Path: "/repos/api", Tags: []string{"backend"}},
-		{ID: "two", Name: "dotfiles", Path: "/home/me/.config/nvim", Tags: []string{"config"}},
+		{ID: "one", Name: "api", Path: "/repos/api", Branch: "main", GitState: domain.GitStateClean, Tags: []string{"backend"}},
+		{ID: "two", Name: "dotfiles", Path: "/home/me/.config/nvim", Branch: "config/ui", GitState: domain.GitStateDirty, Tags: []string{"config"}},
 	}
 	items := make([]Action, len(projects))
 	for index, project := range projects {
-		items[index] = Action{Name: project.Name, ID: project.ID, Description: project.Path, Search: project.Name + " " + project.Path + " " + strings.Join(project.Tags, " ")}
+		items[index] = Action{Name: project.Name, ID: project.ID, Description: projectMetadata(project), Search: project.Name + " " + project.Path + " " + strings.Join(project.Tags, " ")}
 	}
 	model := newSelectorModelFor("open project", "projects", items)
 	model = updateSelector(model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("config")})
@@ -30,10 +30,28 @@ func TestProjectSelectorSearchesNamePathAndTags(t *testing.T) {
 		t.Fatalf("project matches = %#v", model.matches)
 	}
 	view := model.View()
-	for _, expected := range []string{"2 projects", "dotfiles", "/home/me/.config/nvim"} {
+	for _, expected := range []string{"2 projects", "dotfiles", "config/ui", "dirty"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("project selector view does not contain %q:\n%s", expected, view)
 		}
+	}
+}
+
+func TestProjectSelectorViewKeepsColoredMetadataOnOneLine(t *testing.T) {
+	model := newSelectorModelFor("open project", "projects", []Action{{
+		Name:        "alpha-service",
+		ID:          "one",
+		Description: projectMetadata(domain.Project{Branch: "feature/selector-wrap", GitState: domain.GitStateDirty}),
+	}})
+	model = updateSelector(model, tea.WindowSizeMsg{Width: 44, Height: 10})
+	view := model.View()
+	for _, expected := range []string{"alpha-service", "feature/selector-wrap"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("selector view does not contain %q:\n%s", expected, view)
+		}
+	}
+	if strings.Contains(view, "alpha-service\n") || strings.Contains(view, "feature/selector-wrap\n") {
+		t.Fatalf("selector metadata wrapped unexpectedly:\n%s", view)
 	}
 }
 

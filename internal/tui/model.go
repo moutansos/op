@@ -90,14 +90,12 @@ func NewModel(ctx context.Context, service domain.Service, options Options) Mode
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	options = options.withDefaults()
-	delegate := list.NewDefaultDelegate()
-	delegate.SetSpacing(0)
-	projects := list.New(nil, delegate, 40, 12)
+	projects := list.New(nil, projectDelegate{}, 40, 12)
 	projects.Title = "Projects"
 	projects.SetShowTitle(false)
 	projects.SetShowHelp(false)
 	projects.SetShowPagination(false)
-	projects.SetStatusBarItemName("project", "projects")
+	projects.SetShowStatusBar(false)
 	projects.DisableQuitKeybindings()
 
 	return Model{
@@ -324,6 +322,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateOpeners(key)
 	}
 	if m.overlay == noOverlay && m.section == projectsSection && m.projects.SettingFilter() {
+		if handled := m.handleProjectFilterNavigation(key); handled {
+			return m, nil
+		}
 		if key.String() == "enter" {
 			m.projectFilterGeneration++
 			m.projects.SetFilterText(m.projects.FilterValue())
@@ -403,6 +404,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateProjects(key)
 	}
 	return m, nil
+}
+
+func (m *Model) handleProjectFilterNavigation(key tea.KeyMsg) bool {
+	if len(m.projects.VisibleItems()) == 0 {
+		return false
+	}
+	switch key.String() {
+	case "up", "ctrl+p":
+		m.projects.CursorUp()
+	case "down", "ctrl+n":
+		m.projects.CursorDown()
+	case "pgup":
+		m.projects.PrevPage()
+	case "pgdown":
+		m.projects.NextPage()
+	case "home":
+		m.projects.GoToStart()
+	case "end":
+		m.projects.GoToEnd()
+	default:
+		return false
+	}
+	m.projectSelectionUnavailable = false
+	return true
 }
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -680,6 +705,9 @@ func (m Model) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) projectNavigationKey(msg tea.KeyMsg) bool {
 	value := msg.String()
+	if value == "ctrl+p" || value == "ctrl+n" {
+		return true
+	}
 	for _, binding := range [][]string{
 		m.projects.KeyMap.CursorUp.Keys(),
 		m.projects.KeyMap.CursorDown.Keys(),
