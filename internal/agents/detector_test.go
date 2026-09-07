@@ -629,6 +629,24 @@ func TestTrailingWhitespaceDoesNotCountAsOutput(t *testing.T) {
 	}
 }
 
+func TestOpenCode2ProcessIsRecognized(t *testing.T) {
+	detector := newTestDetector(t)
+	pane := Pane{
+		PaneID:  "%8",
+		Command: "opencode2",
+		Foreground: Foreground{
+			PID:     700001,
+			Command: "opencode2",
+			Args:    []string{"opencode2"},
+			Valid:   true,
+		},
+	}
+	name, ok := detector.Match(pane)
+	if !ok || name != "opencode2" {
+		t.Fatalf("Match() = (%q, %v), want (opencode2, true)", name, ok)
+	}
+}
+
 func TestRuntimeWrappedAgentIsRecognized(t *testing.T) {
 	detector := newTestDetector(t)
 	pane := Pane{

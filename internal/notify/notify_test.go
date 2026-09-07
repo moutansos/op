@@ -139,7 +139,7 @@ func TestMonitorNotifiesOnBusyToIdle(t *testing.T) {
 		mu.Lock()
 		sent = append(sent, n)
 		mu.Unlock()
-	}}, "https://desktop.example", 0, nil)
+	}}, "https://desktop.example", 0, SourceOpenCode, nil)
 	monitor.handleStatus(context.Background(), "/repos/op", sessionStatusEvent{SessionID: "s1", Status: "busy"})
 	monitor.handleStatus(context.Background(), "/repos/op", sessionStatusEvent{SessionID: "s1", Status: "idle"})
 	deadline := time.Now().Add(time.Second)
@@ -163,7 +163,7 @@ func TestMonitorSkipsInitialIdle(t *testing.T) {
 	var sent []Notification
 	monitor := newMonitor(&openCodeClient{client: &http.Client{}}, recordingSender{send: func(n Notification) {
 		sent = append(sent, n)
-	}}, "", 0, nil)
+	}}, "", 0, SourceOpenCode, nil)
 	monitor.handleStatus(context.Background(), "/repos/op", sessionStatusEvent{SessionID: "s1", Status: "idle"})
 	time.Sleep(30 * time.Millisecond)
 	if len(sent) != 0 {
@@ -250,6 +250,54 @@ type recordingSender struct {
 func (r recordingSender) Send(_ context.Context, notification Notification) error {
 	r.send(notification)
 	return nil
+}
+
+func TestTranslateV2Events(t *testing.T) {
+	directory, payload, ok := translateV2Event([]byte(`{"type":"session.execution.started","data":{"sessionID":"ses_1"}}`))
+	if !ok || directory != "" {
+		t.Fatalf("started ok=%v directory=%q", ok, directory)
+	}
+	status, ok := parseSessionStatus(payload)
+	if !ok || status.SessionID != "ses_1" || status.Status != "busy" {
+		t.Fatalf("started status = %+v ok=%v", status, ok)
+	}
+
+	_, payload, ok = translateV2Event([]byte(`{"type":"session.execution.succeeded","data":{"sessionID":"ses_1"},"location":{"directory":"/repos/op"}}`))
+	if !ok {
+		t.Fatal("succeeded not translated")
+	}
+	status, ok = parseSessionStatus(payload)
+	if !ok || status.Status != "idle" {
+		t.Fatalf("succeeded status = %+v ok=%v", status, ok)
+	}
+
+	directory, payload, ok = translateV2Event([]byte(`{"type":"form.created","data":{"form":{"id":"frm_1","sessionID":"ses_1","title":"Ready?","fields":[{"key":"choice","type":"string","title":"Ship it?","options":[{"label":"Yes","value":"yes"}]}]}},"location":{"directory":"/repos/op"}}`))
+	if !ok || directory != "/repos/op" {
+		t.Fatalf("form ok=%v directory=%q", ok, directory)
+	}
+	question, ok := parseQuestionAsked(payload)
+	if !ok || question.ID != "frm_1" || question.Questions[0].Question != "Ship it?" {
+		t.Fatalf("form question = %+v ok=%v", question, ok)
+	}
+
+	_, payload, ok = translateV2Event([]byte(`{"type":"permission.asked","data":{"id":"per_1","sessionID":"ses_1","action":"edit","resources":["README.md"]}}`))
+	if !ok {
+		t.Fatal("permission not translated")
+	}
+	permission, ok := parsePermissionAsked(payload)
+	if !ok || permission.ID != "per_1" || permission.PermissionType != "edit" {
+		t.Fatalf("permission = %+v ok=%v", permission, ok)
+	}
+
+	if _, _, ok := translateV2Event([]byte(`{"type":"server.connected","data":{}}`)); ok {
+		t.Fatal("unrelated events should be ignored")
+	}
+}
+
+func TestCanonicalizeOpenCode2URLRewritesWildcardHost(t *testing.T) {
+	if got := canonicalizeOpenCode2URL("http://0.0.0.0:49374/"); got != "http://127.0.0.1:49374" {
+		t.Fatalf("canonicalizeOpenCode2URL() = %q", got)
+	}
 }
 
 func TestIngestNotifyHandler(t *testing.T) {

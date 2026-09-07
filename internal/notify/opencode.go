@@ -53,6 +53,7 @@ type sessionInfo struct {
 	ParentSessionID string
 	Title           string
 	ProjectID       string
+	Directory       string
 }
 
 type openCodeClient struct {

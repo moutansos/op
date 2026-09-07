@@ -434,14 +434,12 @@ func TestDefaultsEnableAgentDetectionWithBuiltinProfiles(t *testing.T) {
 	if len(definitions) == 0 {
 		t.Fatal("AgentDefinitions() should fall back to the built-in profiles")
 	}
-	found := false
+	found := map[string]bool{}
 	for _, definition := range definitions {
-		if definition.Name == "opencode" {
-			found = true
-		}
+		found[definition.Name] = true
 	}
-	if !found {
-		t.Fatalf("built-in profiles are missing opencode: %+v", definitions)
+	if !found["opencode"] || !found["opencode2"] {
+		t.Fatalf("built-in profiles are missing opencode/opencode2: %+v", definitions)
 	}
 }
 
@@ -497,6 +495,7 @@ func TestMigrateReadsNotificationsBlock(t *testing.T) {
 			"debounce":"5s",
 			"ignoreDirectories":["/tmp"],
 			"opencode":{"baseUrl":"http://127.0.0.1:4096","desktopBaseUrl":"https://oc.example"},
+			"opencode2":{"enabled":true,"desktopBaseUrl":"https://oc2.example"},
 			"ingest":{"enabled":true},
 			"providers":[{"type":"discord","enabled":true,"webhookUrl":"https://discord.com/api/webhooks/x"}]
 		}
@@ -514,6 +513,9 @@ func TestMigrateReadsNotificationsBlock(t *testing.T) {
 	if !config.Notifications.Ingest.Enabled || config.Notifications.OpenCode.BaseURL != "http://127.0.0.1:4096" {
 		t.Fatalf("opencode/ingest = %#v %#v", config.Notifications.OpenCode, config.Notifications.Ingest)
 	}
+	if !config.Notifications.OpenCode2.Enabled || config.Notifications.OpenCode2.DesktopBaseURL != "https://oc2.example" {
+		t.Fatalf("opencode2 = %#v", config.Notifications.OpenCode2)
+	}
 	if len(config.Notifications.Providers) != 1 || config.Notifications.Providers[0].Type != "discord" {
 		t.Fatalf("providers = %#v", config.Notifications.Providers)
 	}
@@ -527,6 +529,11 @@ func TestValidateRejectsBadNotificationConfiguration(t *testing.T) {
 		"bad base url": func(c *Config) {
 			c.Notifications.Enabled = true
 			c.Notifications.OpenCode.BaseURL = "not-a-url"
+		},
+		"bad opencode2 url": func(c *Config) {
+			c.Notifications.Enabled = true
+			c.Notifications.OpenCode2.Enabled = true
+			c.Notifications.OpenCode2.BaseURL = "not-a-url"
 		},
 		"username only": func(c *Config) {
 			c.Notifications.Enabled = true
@@ -549,6 +556,15 @@ func TestValidateRejectsBadNotificationConfiguration(t *testing.T) {
 		if err := Validate(config); err == nil || !domain.IsCode(err, domain.ErrorCodeConfig) {
 			t.Fatalf("Validate() with %s error = %v, want a config error", name, err)
 		}
+	}
+}
+
+func TestValidateAcceptsOpenCode2WithoutBaseURL(t *testing.T) {
+	config := validConfig(t)
+	config.Notifications.Enabled = true
+	config.Notifications.OpenCode2.Enabled = true
+	if err := Validate(config); err != nil {
+		t.Fatal(err)
 	}
 }
 

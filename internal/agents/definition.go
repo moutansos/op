@@ -125,6 +125,11 @@ func Builtins() []Definition {
 			PromptPatterns: []string{`(?i)ctrl\+p\s+commands`},
 		},
 		{
+			Name:           "opencode2",
+			Match:          []string{"opencode2"},
+			PromptPatterns: []string{`(?i)ctrl\+p\s+commands`},
+		},
+		{
 			Name:  "claude",
 			Match: []string{"claude", "claude-code"},
 			PromptPatterns: []string{

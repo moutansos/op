@@ -49,7 +49,7 @@ func (p *teamsProvider) Send(ctx context.Context, notification Notification) err
 	}
 	if notification.DesktopURL != "" {
 		label := "Open session"
-		if notification.Source == SourceOpenCode || notification.Source == "" {
+		if notification.Source == SourceOpenCode || notification.Source == SourceOpenCode2 || notification.Source == "" {
 			label = "Open in OpenCode Desktop"
 		}
 		content["actions"] = []any{map[string]any{"type": "Action.OpenUrl", "title": label, "url": notification.DesktopURL}}

@@ -184,8 +184,8 @@ func validateNotifications(config NotificationsConfig) error {
 		}
 	}
 	hasOpenCode := strings.TrimSpace(config.OpenCode.BaseURL) != ""
-	if !hasOpenCode && !config.Ingest.Enabled {
-		return invalid("notifications", "must enable ingest or set notifications.opencode.baseUrl")
+	if !hasOpenCode && !config.OpenCode2.Enabled && !config.Ingest.Enabled {
+		return invalid("notifications", "must enable ingest, set notifications.opencode.baseUrl, or enable notifications.opencode2")
 	}
 	if hasOpenCode {
 		if err := requireHTTPURL("notifications.opencode.baseUrl", config.OpenCode.BaseURL); err != nil {
@@ -201,6 +201,16 @@ func validateNotifications(config NotificationsConfig) error {
 	hasPassword := config.OpenCode.Password != ""
 	if hasUser != hasPassword {
 		return invalid("notifications.opencode", "username and password must be configured together")
+	}
+	if strings.TrimSpace(config.OpenCode2.BaseURL) != "" {
+		if err := requireHTTPURL("notifications.opencode2.baseUrl", config.OpenCode2.BaseURL); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(config.OpenCode2.DesktopBaseURL) != "" {
+		if err := requireHTTPURL("notifications.opencode2.desktopBaseUrl", config.OpenCode2.DesktopBaseURL); err != nil {
+			return err
+		}
 	}
 	for i, provider := range config.Providers {
 		if err := validateNotificationProvider(fmt.Sprintf("notifications.providers[%d]", i), provider); err != nil {

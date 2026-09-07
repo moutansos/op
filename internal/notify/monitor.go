@@ -19,11 +19,17 @@ type sessionState struct {
 	lastSeen time.Time
 }
 
+type eventClient interface {
+	watch(ctx context.Context, handle func(string, json.RawMessage)) error
+	fetchSessionInfo(ctx context.Context, sessionID, directory string) (sessionInfo, bool)
+}
+
 type Monitor struct {
-	client     *openCodeClient
+	client     eventClient
 	notifier   Sender
 	desktopURL string
 	debounce   time.Duration
+	source     Source
 	logger     *slog.Logger
 
 	mu          sync.Mutex
@@ -34,15 +40,19 @@ type Monitor struct {
 	permissions map[string]time.Time
 }
 
-func newMonitor(client *openCodeClient, notifier Sender, desktopURL string, debounce time.Duration, logger *slog.Logger) *Monitor {
+func newMonitor(client eventClient, notifier Sender, desktopURL string, debounce time.Duration, source Source, logger *slog.Logger) *Monitor {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if source == "" {
+		source = SourceOpenCode
 	}
 	return &Monitor{
 		client:      client,
 		notifier:    notifier,
 		desktopURL:  desktopURL,
 		debounce:    debounce,
+		source:      source,
 		logger:      logger,
 		sessions:    map[string]sessionState{},
 		pending:     map[string]*time.Timer{},
@@ -134,9 +144,10 @@ func (m *Monitor) flushIdle(ctx context.Context, directory, sessionID string) {
 	if title == "" {
 		title = sessionID
 	}
+	directory = firstNonEmpty(info.Directory, directory)
 	_ = m.notifier.Send(ctx, Notification{
 		Type:             TypeIdle,
-		Source:           SourceOpenCode,
+		Source:           m.source,
 		SessionID:        sessionID,
 		SessionTitle:     title,
 		ProjectID:        info.ProjectID,
@@ -171,9 +182,10 @@ func (m *Monitor) handleQuestion(ctx context.Context, directory string, event qu
 	if title == "" {
 		title = event.SessionID
 	}
+	directory = firstNonEmpty(info.Directory, directory)
 	_ = m.notifier.Send(ctx, Notification{
 		Type:             TypeQuestion,
-		Source:           SourceOpenCode,
+		Source:           m.source,
 		SessionID:        event.SessionID,
 		SessionTitle:     title,
 		ProjectID:        info.ProjectID,
@@ -210,9 +222,10 @@ func (m *Monitor) handlePermission(ctx context.Context, directory string, event 
 	if title == "" {
 		title = event.SessionID
 	}
+	directory = firstNonEmpty(info.Directory, directory)
 	_ = m.notifier.Send(ctx, Notification{
 		Type:             TypePermission,
-		Source:           SourceOpenCode,
+		Source:           m.source,
 		SessionID:        event.SessionID,
 		SessionTitle:     title,
 		ProjectID:        info.ProjectID,

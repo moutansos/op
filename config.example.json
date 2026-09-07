@@ -24,6 +24,11 @@
         "promptPatterns": ["(?i)ctrl\\+p\\s+commands"]
       },
       {
+        "name": "opencode2",
+        "match": ["opencode2"],
+        "promptPatterns": ["(?i)ctrl\\+p\\s+commands"]
+      },
+      {
         "name": "claude",
         "match": ["claude"],
         "promptPatterns": ["(?i)shift\\+tab\\s+to\\s+cycle"],
@@ -39,6 +44,12 @@
       "baseUrl": "http://127.0.0.1:4096",
       "desktopBaseUrl": "https://opencode.example.com",
       "username": "",
+      "password": ""
+    },
+    "opencode2": {
+      "enabled": false,
+      "baseUrl": "",
+      "desktopBaseUrl": "",
       "password": ""
     },
     "ingest": {
@@ -96,6 +107,18 @@
       "name": "VS Code",
       "mode": "gui",
       "command": "code {{path}}"
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode in tmux",
+      "mode": "tmux",
+      "command": "opencode ."
+    },
+    {
+      "id": "opencode2",
+      "name": "OpenCode 2 in tmux",
+      "mode": "tmux",
+      "command": "opencode2 ."
     }
   ],
   "customEntries": [
@@ -111,6 +134,11 @@
     {
       "name": "Open opencode",
       "command": "cd {{oproot}} && opencode {{path}}",
+      "runInPreferredShell": true
+    },
+    {
+      "name": "Open opencode2",
+      "command": "cd {{oproot}} && opencode2 {{path}}",
       "runInPreferredShell": true
     }
   ]

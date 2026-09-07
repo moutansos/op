@@ -225,6 +225,13 @@ func (r *runner) runServe(ctx context.Context, args []string) error {
 				}
 			}()
 		}
+		if r.config.Notifications.OpenCode2.Enabled {
+			go func() {
+				if err := notifyService.WatchOpenCode2(serveCtx); err != nil && serveCtx.Err() == nil {
+					logger.Error("opencode2 notification watcher stopped", "err", err)
+				}
+			}()
+		}
 	}
 	return r.options.RunServer(serveCtx, service, options)
 }
@@ -254,6 +261,12 @@ func notifyOptions(config config.NotificationsConfig, logger *slog.Logger) notif
 			DesktopBaseURL: config.OpenCode.DesktopBaseURL,
 			Username:       config.OpenCode.Username,
 			Password:       config.OpenCode.Password,
+		},
+		OpenCode2: notify.OpenCode2Config{
+			Enabled:        config.OpenCode2.Enabled,
+			BaseURL:        config.OpenCode2.BaseURL,
+			DesktopBaseURL: config.OpenCode2.DesktopBaseURL,
+			Password:       config.OpenCode2.Password,
 		},
 		Providers: providers,
 		Logger:    logger,

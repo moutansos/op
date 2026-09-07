@@ -131,7 +131,7 @@ func ParseNotifyBody(body map[string]any) (Notification, error) {
 		notification.SessionTitle = sessionID
 	}
 	switch source := stringField(body, "source"); source {
-	case string(SourceClaudeCode), string(SourceOpenCode), string(SourceGrokCode), string(SourceCodex), string(SourceCopilotCLI):
+	case string(SourceClaudeCode), string(SourceOpenCode), string(SourceOpenCode2), string(SourceGrokCode), string(SourceCodex), string(SourceCopilotCLI):
 		notification.Source = Source(source)
 	}
 	if raw, ok := body["timestamp"].(string); ok && raw != "" {

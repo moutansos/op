@@ -48,18 +48,26 @@ type rawAgentsConfig struct {
 }
 
 type rawNotificationsConfig struct {
-	Enabled           *bool                           `json:"enabled"`
-	Debounce          *Duration                       `json:"debounce"`
-	IgnoreDirectories *[]string                       `json:"ignoreDirectories"`
-	OpenCode          *rawNotificationsOpenCodeConfig `json:"opencode"`
-	Ingest            *rawNotificationsIngestConfig   `json:"ingest"`
-	Providers         *[]NotificationProviderConfig   `json:"providers"`
+	Enabled           *bool                            `json:"enabled"`
+	Debounce          *Duration                        `json:"debounce"`
+	IgnoreDirectories *[]string                        `json:"ignoreDirectories"`
+	OpenCode          *rawNotificationsOpenCodeConfig  `json:"opencode"`
+	OpenCode2         *rawNotificationsOpenCode2Config `json:"opencode2"`
+	Ingest            *rawNotificationsIngestConfig    `json:"ingest"`
+	Providers         *[]NotificationProviderConfig    `json:"providers"`
 }
 
 type rawNotificationsOpenCodeConfig struct {
 	BaseURL        *string `json:"baseUrl"`
 	DesktopBaseURL *string `json:"desktopBaseUrl"`
 	Username       *string `json:"username"`
+	Password       *string `json:"password"`
+}
+
+type rawNotificationsOpenCode2Config struct {
+	Enabled        *bool   `json:"enabled"`
+	BaseURL        *string `json:"baseUrl"`
+	DesktopBaseURL *string `json:"desktopBaseUrl"`
 	Password       *string `json:"password"`
 }
 
@@ -254,6 +262,20 @@ func applyNotifications(target *NotificationsConfig, raw *rawNotificationsConfig
 			target.OpenCode.Password = *raw.OpenCode.Password
 		}
 	}
+	if raw.OpenCode2 != nil {
+		if raw.OpenCode2.Enabled != nil {
+			target.OpenCode2.Enabled = *raw.OpenCode2.Enabled
+		}
+		if raw.OpenCode2.BaseURL != nil {
+			target.OpenCode2.BaseURL = *raw.OpenCode2.BaseURL
+		}
+		if raw.OpenCode2.DesktopBaseURL != nil {
+			target.OpenCode2.DesktopBaseURL = *raw.OpenCode2.DesktopBaseURL
+		}
+		if raw.OpenCode2.Password != nil {
+			target.OpenCode2.Password = *raw.OpenCode2.Password
+		}
+	}
 	if raw.Ingest != nil && raw.Ingest.Enabled != nil {
 		target.Ingest.Enabled = *raw.Ingest.Enabled
 	}
@@ -299,8 +321,9 @@ func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	collectObjectUnknown(root["stats"], "stats", set("refreshInterval", "tmuxRefreshInterval"), &warnings)
 	collectObjectUnknown(root["agents"], "agents", set("enabled", "quietAfter", "idleAfter", "scanLines", "definitions"), &warnings)
 	collectAgentDefinitionUnknown(root["agents"], &warnings)
-	collectObjectUnknown(root["notifications"], "notifications", set("enabled", "debounce", "ignoreDirectories", "opencode", "ingest", "providers"), &warnings)
+	collectObjectUnknown(root["notifications"], "notifications", set("enabled", "debounce", "ignoreDirectories", "opencode", "opencode2", "ingest", "providers"), &warnings)
 	collectObjectUnknown(notificationsObject(root["notifications"])["opencode"], "notifications.opencode", set("baseUrl", "desktopBaseUrl", "username", "password"), &warnings)
+	collectObjectUnknown(notificationsObject(root["notifications"])["opencode2"], "notifications.opencode2", set("enabled", "baseUrl", "desktopBaseUrl", "password"), &warnings)
 	collectObjectUnknown(notificationsObject(root["notifications"])["ingest"], "notifications.ingest", set("enabled"), &warnings)
 	collectArrayUnknown(notificationsObject(root["notifications"])["providers"], "notifications.providers", set("type", "enabled", "webhookUrl", "url", "method", "headers", "token", "maxHops", "timeout"), "", nil, &warnings)
 	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "tokenFile", "tlsCertFile", "tlsKeyFile"), &warnings)

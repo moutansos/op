@@ -13,6 +13,7 @@ var harnessAvatarURL = map[Source]string{
 	SourceCodex:      "https://www.google.com/s2/favicons?domain=openai.com&sz=128",
 	SourceCopilotCLI: "https://www.google.com/s2/favicons?domain=github.com&sz=128",
 	SourceOpenCode:   "https://www.google.com/s2/favicons?domain=opencode.ai&sz=128",
+	SourceOpenCode2:  "https://www.google.com/s2/favicons?domain=opencode.ai&sz=128",
 }
 
 type discordProvider struct {
@@ -73,7 +74,7 @@ func (p *discordProvider) Send(ctx context.Context, notification Notification) e
 	}
 	if notification.DesktopURL != "" {
 		label := "Open session"
-		if source == SourceOpenCode {
+		if source == SourceOpenCode || source == SourceOpenCode2 {
 			label = "Open in OpenCode Desktop"
 		}
 		body["components"] = []any{

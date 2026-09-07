@@ -226,6 +226,12 @@ The canonical file is JSON:
       "username": "",
       "password": ""
     },
+    "opencode2": {
+      "enabled": false,
+      "baseUrl": "",
+      "desktopBaseUrl": "",
+      "password": ""
+    },
     "ingest": {
       "enabled": false
     },
@@ -268,6 +274,11 @@ The canonical file is JSON:
     {
       "name": "Open opencode",
       "command": "cd {{oproot}} && opencode {{path}}",
+      "runInPreferredShell": true
+    },
+    {
+      "name": "Open opencode2",
+      "command": "cd {{oproot}} && opencode2 {{path}}",
       "runInPreferredShell": true
     }
   ]
@@ -341,11 +352,12 @@ frames. `agents.idleAfter` is how long an unrecognized quiet pane stays quiet be
 idle instead of assumed to be mid-task. `agents.scanLines` bounds how many trailing non-empty lines
 are pattern matched.
 
-`agents.definitions` replaces the built-in profiles for `opencode`, `claude`, `codex`, `aider`,
-`gemini`, and `grok`. Each definition takes a `name`, a `match` list of command names compared
+`agents.definitions` replaces the built-in profiles for `opencode`, `opencode2`, `claude`, `codex`,
+`aider`, `gemini`, and `grok`. Each definition takes a `name`, a `match` list of command names compared
 against the pane's foreground process, and optional `busyPatterns`, `promptPatterns`, and
 `approvalPatterns` regular expressions. Pattern lists are unioned with op's generic patterns rather
-than replacing them, so a definition only needs to carry what is specific to that agent.
+than replacing them, so a definition only needs to carry what is specific to that agent. OpenCode 1
+matches `opencode`, `oc`, and `oca`; OpenCode 2 matches `opencode2`.
 
 ```json
 {
@@ -364,19 +376,27 @@ no foreground PID is resolved.
 
 ### Session Notifications
 
-`op serve` can watch OpenCode's `/global/event` SSE stream and accept hook payloads from Claude Code,
-Grok, Codex, and Copilot CLI, then push Discord, Microsoft Teams, generic webhook, or parent-instance
-notifications when a session becomes idle, asks a question, or needs permission.
+`op serve` can watch OpenCode 1's `/global/event` SSE stream, OpenCode 2's `/api/event` stream, and
+accept hook payloads from Claude Code, Grok, Codex, and Copilot CLI, then push Discord, Microsoft
+Teams, generic webhook, or parent-instance notifications when a session becomes idle, asks a
+question, or needs permission.
 
 This is independent of observational pane detection. SSE reports accurate idle/question/permission
 transitions for OpenCode server-mode sessions, including those with no tmux pane. The dashboard
 classifier is unchanged.
 
 `notifications.enabled` turns the whole feature off. When enabled, configure at least
-`notifications.opencode.baseUrl` or `notifications.ingest.enabled`. Idle notifications from OpenCode
-are sent only on a busy-to-idle transition after `notifications.debounce` (3s by default), and are
-cancelled if the session goes busy again. Subagent sessions are skipped. `ignoreDirectories`
-suppresses any session whose project path is that directory or below it.
+`notifications.opencode.baseUrl`, `notifications.opencode2.enabled`, or `notifications.ingest.enabled`.
+Idle notifications from OpenCode are sent only on a busy-to-idle transition after
+`notifications.debounce` (3s by default), and are cancelled if the session goes busy again. Subagent
+sessions are skipped. `ignoreDirectories` suppresses any session whose project path is that directory
+or below it.
+
+OpenCode 1 and OpenCode 2 can be watched together. `notifications.opencode` is the v1 server
+(`http://127.0.0.1:4096` by convention). `notifications.opencode2.enabled` watches the v2 background
+service; leave `baseUrl` and `password` empty to discover them from
+`~/.local/state/opencode/service.json` (or `$XDG_STATE_HOME/opencode/service.json`). Set them
+explicitly to pin a specific v2 server. v2 auth is HTTP Basic with username `opencode`.
 
 Ingest routes share the `op serve` listener and the same bearer token. Plugin forwarders default to
 `http://127.0.0.1:8787`; set `OC_NOTIFIER_URL` / `OC_NOTIFIER_TOKEN` (or the Claude plugin user

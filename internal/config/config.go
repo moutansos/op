@@ -109,15 +109,27 @@ type NotificationsConfig struct {
 	Debounce          Duration                     `json:"debounce"`
 	IgnoreDirectories []string                     `json:"ignoreDirectories"`
 	OpenCode          NotificationsOpenCodeConfig  `json:"opencode"`
+	OpenCode2         NotificationsOpenCode2Config `json:"opencode2"`
 	Ingest            NotificationsIngestConfig    `json:"ingest"`
 	Providers         []NotificationProviderConfig `json:"providers"`
 }
 
-// NotificationsOpenCodeConfig connects to an OpenCode server's global SSE stream.
+// NotificationsOpenCodeConfig connects to an OpenCode 1 server's global SSE stream.
 type NotificationsOpenCodeConfig struct {
 	BaseURL        string `json:"baseUrl"`
 	DesktopBaseURL string `json:"desktopBaseUrl"`
 	Username       string `json:"username"`
+	Password       string `json:"password"`
+}
+
+// NotificationsOpenCode2Config connects to an OpenCode 2 background service.
+//
+// When Enabled is true and BaseURL is empty, op discovers the local service
+// from ~/.local/state/opencode/service.json (or $XDG_STATE_HOME/opencode/service.json).
+type NotificationsOpenCode2Config struct {
+	Enabled        bool   `json:"enabled"`
+	BaseURL        string `json:"baseUrl"`
+	DesktopBaseURL string `json:"desktopBaseUrl"`
 	Password       string `json:"password"`
 }
 

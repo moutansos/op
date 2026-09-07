@@ -19,6 +19,7 @@ type Source string
 
 const (
 	SourceOpenCode   Source = "opencode"
+	SourceOpenCode2  Source = "opencode2"
 	SourceClaudeCode Source = "claude-code"
 	SourceGrokCode   Source = "grok-code"
 	SourceCodex      Source = "codex"
@@ -57,6 +58,8 @@ func (s Source) Label() string {
 		return "Codex"
 	case SourceCopilotCLI:
 		return "Copilot CLI"
+	case SourceOpenCode2:
+		return "OpenCode 2"
 	default:
 		return "OpenCode"
 	}
