@@ -136,3 +136,31 @@ func TestCreatedWindowID(t *testing.T) {
 		})
 	}
 }
+
+func TestFindKeyBindingSelectsTableFromPaddedListKeysOutput(t *testing.T) {
+	output := strings.Join([]string{
+		`bind-key    -T copy-mode    T                         command-prompt -1 -p "(jump to backward)" { send-keys -X jump-to-backward -- "%%" }`,
+		`bind-key    -T copy-mode-vi T                         command-prompt -1 -p "(jump to backward)" { send-keys -X jump-to-backward -- "%%" }`,
+		`bind-key    -T prefix       T                         display-popup -E -h "80%" -w "80%" "op tree"`,
+		`bind-key    -T prefix       Tab                       select-pane -t :.+`,
+		`bind-key    -T prefix       Space                     next-layout`,
+	}, "\n") + "\n"
+
+	line, ok := findKeyBinding(output, "prefix", "T")
+	if !ok || !strings.Contains(line, `display-popup -E -h "80%" -w "80%" "op tree"`) {
+		t.Fatalf("prefix T = %q, %v", line, ok)
+	}
+	line, ok = findKeyBinding(output, "prefix", "Space")
+	if !ok || !strings.Contains(line, "next-layout") {
+		t.Fatalf("prefix Space = %q, %v", line, ok)
+	}
+	if line, ok := findKeyBinding(output, "prefix", "Tab"); !ok || !strings.Contains(line, "select-pane") {
+		t.Fatalf("prefix Tab = %q, %v", line, ok)
+	}
+	if line, ok := findKeyBinding(output, "root", "T"); ok {
+		t.Fatalf("missing table = %q, %v", line, ok)
+	}
+	if line, ok := findKeyBinding("", "prefix", "T"); ok {
+		t.Fatalf("empty output = %q, %v", line, ok)
+	}
+}

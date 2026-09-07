@@ -451,11 +451,50 @@ func (c *commandClient) BindKey(ctx context.Context, table, key string, command 
 }
 
 func (c *commandClient) KeyBinding(ctx context.Context, table, key string) (string, bool, error) {
-	value, err := c.raw.run(ctx, "list-keys", "-T", table, key)
+	// tmux 3.7/3.7b accepts `list-keys -T table key` but prints nothing for a
+	// matching binding (exit 0, empty stdout). Query by key and select the table.
+	value, err := c.raw.run(ctx, "list-keys", key)
 	if err != nil {
 		return "", false, nil
 	}
-	return trimOneLineEnding(value), true, nil
+	line, ok := findKeyBinding(value, table, key)
+	return line, ok, nil
+}
+
+func findKeyBinding(output, table, key string) (string, bool) {
+	output = trimOneLineEnding(output)
+	if output == "" {
+		return "", false
+	}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if keyBindingLineMatches(line, table, key) {
+			return line, true
+		}
+	}
+	return "", false
+}
+
+func keyBindingLineMatches(line, table, key string) bool {
+	if !strings.HasPrefix(strings.TrimLeft(line, " \t"), "bind-key") {
+		return false
+	}
+	marker := "-T " + table + " "
+	index := strings.Index(line, marker)
+	if index < 0 {
+		return false
+	}
+	rest := strings.TrimLeft(line[index+len(marker):], " \t")
+	if rest == key {
+		return true
+	}
+	if len(rest) > len(key) && strings.HasPrefix(rest, key) {
+		switch rest[len(key)] {
+		case ' ', '\t':
+			return true
+		}
+	}
+	return false
 }
 
 func (c *commandClient) SessionOption(ctx context.Context, session, key string) (string, bool, error) {

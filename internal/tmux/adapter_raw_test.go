@@ -244,6 +244,31 @@ func TestRawInteractiveCancellationReturnsDeadline(t *testing.T) {
 	}
 }
 
+func TestKeyBindingQueriesByKeyBecauseTableAndKeyTogetherAreSilent(t *testing.T) {
+	root := t.TempDir()
+	arguments := filepath.Join(root, "arguments")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > '" + arguments + "'\n" +
+		"if [ \"$1\" = \"-S\" ]; then shift 2; fi\n" +
+		"if [ \"$1\" = \"list-keys\" ] && [ \"$2\" = \"-T\" ]; then exit 0; fi\n" +
+		"printf '%s\\n' 'bind-key    -T copy-mode    T                         command-prompt -1 -p \"(jump to backward)\" { send-keys -X jump-to-backward -- \"%%\" }'\n" +
+		"printf '%s\\n' 'bind-key    -T prefix       T                         display-popup -E -h \"80%\" -w \"80%\" \"op tree\"'\n"
+	client := &commandClient{raw: rawTmux{executable: writeExecutable(t, root, "tmux-list-keys", script), socket: filepath.Join(root, "tmux.sock")}}
+
+	value, exists, err := client.KeyBinding(context.Background(), "prefix", "T")
+	if err != nil || !exists || !strings.Contains(value, `display-popup -E -h "80%" -w "80%" "op tree"`) {
+		t.Fatalf("KeyBinding() = %q, %v, %v", value, exists, err)
+	}
+	data, err := os.ReadFile(arguments)
+	if err != nil {
+		t.Fatalf("read query arguments: %v", err)
+	}
+	want := strings.Join([]string{"-S", filepath.Join(root, "tmux.sock"), "list-keys", "T", ""}, "\n")
+	if string(data) != want {
+		t.Fatalf("list-keys arguments = %q, want %q", data, want)
+	}
+}
+
 func writeExecutable(t *testing.T, directory, name, contents string) string {
 	t.Helper()
 	path := filepath.Join(directory, name)
