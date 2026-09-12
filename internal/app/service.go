@@ -607,6 +607,12 @@ func (s *Service) GetStatsSnapshot(ctx context.Context) (domain.StatsSnapshot, e
 	if err != nil {
 		return domain.StatsSnapshot{}, err
 	}
+	return s.GetStatsForTmux(ctx, tmuxSnapshot)
+}
+
+// GetStatsForTmux keeps parent-facing pane references and detector observations
+// on the same tmux sample while retaining the collector's temporal baseline.
+func (s *Service) GetStatsForTmux(ctx context.Context, tmuxSnapshot domain.TmuxSnapshot) (domain.StatsSnapshot, error) {
 	result, err := s.stats.Collect(ctx, tmuxSnapshot)
 	if err != nil {
 		return domain.StatsSnapshot{}, typed(ctx, "app.get_stats_snapshot", domain.ErrorCodeInternal, "collect statistics", err)

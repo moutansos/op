@@ -152,11 +152,22 @@ type NotificationProviderConfig struct {
 }
 
 type ServerConfig struct {
-	Enabled     bool   `json:"enabled"`
-	Listen      string `json:"listen"`
-	TokenFile   string `json:"tokenFile"`
-	TLSCertFile string `json:"tlsCertFile"`
-	TLSKeyFile  string `json:"tlsKeyFile"`
+	State       StateConfig `json:"state"`
+	Enabled     bool        `json:"enabled"`
+	Listen      string      `json:"listen"`
+	TokenFile   string      `json:"tokenFile"`
+	TLSCertFile string      `json:"tlsCertFile"`
+	TLSKeyFile  string      `json:"tlsKeyFile"`
+}
+
+// StateConfig controls parent-facing reconciliation independently of notifications.
+type StateConfig struct {
+	InstanceID        string   `json:"instanceId,omitempty"`
+	ParentURL         string   `json:"parentUrl,omitempty"`
+	ParentToken       string   `json:"parentToken,omitempty"`
+	RefreshInterval   Duration `json:"refreshInterval,omitempty"`
+	HeartbeatInterval Duration `json:"heartbeatInterval,omitempty"`
+	StaleAfter        Duration `json:"staleAfter,omitempty"`
 }
 
 type ActionsConfig struct {

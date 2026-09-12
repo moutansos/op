@@ -16,6 +16,10 @@ type Notifier struct {
 	ignoreDirectories []string
 	hostname          string
 	logger            *slog.Logger
+	observerMu        sync.Mutex
+	observer          func(Observation)
+	observations      []observationDelivery
+	observing         bool
 }
 
 func NewNotifier(providers []Provider, ignoreDirectories []string, logger *slog.Logger) *Notifier {
@@ -38,12 +42,15 @@ func NewNotifier(providers []Provider, ignoreDirectories []string, logger *slog.
 }
 
 func (n *Notifier) Send(ctx context.Context, notification Notification) error {
+	if strings.TrimSpace(notification.Hostname) == "" {
+		notification.Hostname = n.hostname
+	}
+	if ctx.Value(observedContextKey{}) != true && notification.Hops == 0 {
+		n.Observe(notificationObservation(notification, CoverageNotificationOnly))
+	}
 	if ignored := n.matchIgnoredDirectory(notification.ProjectDirectory); ignored != "" {
 		n.logger.Info("notification suppressed", "session", notification.SessionID, "directory", ignored)
 		return nil
-	}
-	if strings.TrimSpace(notification.Hostname) == "" {
-		notification.Hostname = n.hostname
 	}
 	if len(n.providers) == 0 {
 		n.logger.Info("notification dropped; no providers", "type", notification.Type, "session", notification.SessionID)

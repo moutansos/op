@@ -153,10 +153,12 @@ type TmuxPane struct {
 }
 
 type StatsSnapshot struct {
-	CapturedAt time.Time          `json:"capturedAt"`
-	Host       HostStats          `json:"host"`
-	Processes  []PaneProcessStats `json:"processes"`
-	Agents     []PaneAgentState   `json:"agents,omitempty"`
+	// AgentsError distinguishes disabled/unavailable detection from no agents.
+	AgentsError string             `json:"agentsError,omitempty"`
+	CapturedAt  time.Time          `json:"capturedAt"`
+	Host        HostStats          `json:"host"`
+	Processes   []PaneProcessStats `json:"processes"`
+	Agents      []PaneAgentState   `json:"agents,omitempty"`
 }
 
 // AgentActivity describes what an interactive agent running in a pane is doing.

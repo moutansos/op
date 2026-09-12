@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/moutansos/op/internal/domain"
 )
 
 const (
@@ -71,6 +73,8 @@ func (m *Monitor) Run(ctx context.Context) error {
 
 func (m *Monitor) handlePayload(ctx context.Context, directory string, payload json.RawMessage) {
 	switch payloadType(payload) {
+	case "question.replied", "question.rejected", "question.resolved", "permission.replied", "permission.rejected", "permission.resolved", "session.deleted":
+		m.handleLifecycle(directory, payload)
 	case "session.status":
 		event, ok := parseSessionStatus(payload)
 		if ok {
@@ -100,6 +104,18 @@ func (m *Monitor) handlePayload(ctx context.Context, directory string, payload j
 }
 
 func (m *Monitor) handleStatus(ctx context.Context, directory string, event sessionStatusEvent) {
+	activity := domain.AgentActivityUnknown
+	switch event.Status {
+	case "busy", "retry":
+		activity = domain.AgentActivityWorking
+	case "idle":
+		activity = domain.AgentActivityIdle
+	}
+	if activity != domain.AgentActivityUnknown {
+		observe(m.notifier, Observation{Source: m.source, SessionID: event.SessionID,
+			ProjectDirectory: directory, Activity: activity, Detail: event.Status,
+			Timestamp: time.Now(), Coverage: CoverageNative})
+	}
 	m.mu.Lock()
 	previous := m.sessions[event.SessionID]
 	m.sessions[event.SessionID] = sessionState{status: event.Status, lastSeen: time.Now()}
@@ -145,7 +161,7 @@ func (m *Monitor) flushIdle(ctx context.Context, directory, sessionID string) {
 		title = sessionID
 	}
 	directory = firstNonEmpty(info.Directory, directory)
-	_ = m.notifier.Send(ctx, Notification{
+	_ = m.notifier.Send(alreadyObserved(ctx), Notification{
 		Type:             TypeIdle,
 		Source:           m.source,
 		SessionID:        sessionID,
@@ -183,7 +199,7 @@ func (m *Monitor) handleQuestion(ctx context.Context, directory string, event qu
 		title = event.SessionID
 	}
 	directory = firstNonEmpty(info.Directory, directory)
-	_ = m.notifier.Send(ctx, Notification{
+	_ = sendNative(ctx, m.notifier, Notification{
 		Type:             TypeQuestion,
 		Source:           m.source,
 		SessionID:        event.SessionID,
@@ -194,7 +210,7 @@ func (m *Monitor) handleQuestion(ctx context.Context, directory string, event qu
 		Timestamp:        time.Now(),
 		Question:         formatQuestionText(event),
 		Choices:          buildQuestionChoices(event),
-	})
+	}, CoverageNative)
 }
 
 func (m *Monitor) handlePermission(ctx context.Context, directory string, event permissionEvent) {
@@ -223,7 +239,7 @@ func (m *Monitor) handlePermission(ctx context.Context, directory string, event 
 		title = event.SessionID
 	}
 	directory = firstNonEmpty(info.Directory, directory)
-	_ = m.notifier.Send(ctx, Notification{
+	_ = sendNative(ctx, m.notifier, Notification{
 		Type:             TypePermission,
 		Source:           m.source,
 		SessionID:        event.SessionID,
@@ -235,7 +251,52 @@ func (m *Monitor) handlePermission(ctx context.Context, directory string, event 
 		PermissionTitle:  event.Title,
 		PermissionType:   event.PermissionType,
 		Choices:          buildPermissionChoices(event),
-	})
+	}, CoverageNative)
+}
+
+func (m *Monitor) handleLifecycle(directory string, payload json.RawMessage) {
+	var event struct {
+		Type       string `json:"type"`
+		Properties struct {
+			SessionID string `json:"sessionID"`
+			ProjectID string `json:"projectID"`
+			Info      struct {
+				ID        string `json:"id"`
+				ProjectID string `json:"projectID"`
+				Directory string `json:"directory"`
+			} `json:"info"`
+		} `json:"properties"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return
+	}
+	terminated := event.Type == "session.deleted"
+	id := event.Properties.SessionID
+	if terminated {
+		id = firstNonEmpty(id, event.Properties.Info.ID)
+	}
+	if id == "" {
+		return
+	}
+	m.mu.Lock()
+	if timer := m.pending[id]; timer != nil {
+		timer.Stop()
+		delete(m.pending, id)
+	}
+	if terminated {
+		delete(m.sessions, id)
+		delete(m.subagents, id)
+	} else {
+		m.sessions[id] = sessionState{status: "busy", lastSeen: time.Now()}
+	}
+	m.mu.Unlock()
+	// Resolution clears attention but does not itself prove resumed execution.
+	activity := domain.AgentActivityUnknown
+	observe(m.notifier, Observation{Source: m.source, SessionID: id,
+		ProjectID:        firstNonEmpty(event.Properties.ProjectID, event.Properties.Info.ProjectID),
+		ProjectDirectory: firstNonEmpty(event.Properties.Info.Directory, directory),
+		Activity:         activity, Detail: event.Type, Terminated: terminated,
+		Timestamp: time.Now(), Coverage: CoverageNative})
 }
 
 func (m *Monitor) cleanupLoop(ctx context.Context) {

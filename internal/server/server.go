@@ -22,6 +22,7 @@ import (
 
 	"github.com/moutansos/op/internal/domain"
 	"github.com/moutansos/op/internal/notify"
+	"github.com/moutansos/op/internal/state"
 )
 
 const (
@@ -56,6 +57,7 @@ type Options struct {
 	IdleTimeout        time.Duration
 	Logger             *slog.Logger
 	NotifyIngest       *notify.Ingest
+	State              *state.Tracker
 }
 
 // DefaultOptions returns secure defaults suitable for local CLI composition.
@@ -188,6 +190,7 @@ func (h *Handler) routes() {
 
 	h.mux.Handle("GET /v1/projects", h.authenticate(http.HandlerFunc(h.listProjects)))
 	h.mux.Handle("GET /v1/tmux", h.authenticate(http.HandlerFunc(h.getTmux)))
+	h.mux.Handle("GET /v1/state", h.authenticate(http.HandlerFunc(h.getState)))
 	h.mux.Handle("GET /v1/jobs/{id}", h.authenticate(http.HandlerFunc(h.getJob)))
 	h.mux.Handle("POST /v1/projects", h.authenticate(http.HandlerFunc(h.createProject)))
 	h.mux.Handle("POST /v1/projects/clone", h.authenticate(http.HandlerFunc(h.cloneProject)))
@@ -215,6 +218,7 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("/v1/jobs/{id}", methodNotAllowed(http.MethodGet))
 	h.mux.HandleFunc("/v1/health", methodNotAllowed(http.MethodGet))
 	h.mux.HandleFunc("/v1/tmux", methodNotAllowed(http.MethodGet))
+	h.mux.HandleFunc("/v1/state", methodNotAllowed(http.MethodGet))
 	if h.options.NotifyIngest != nil {
 		h.mux.HandleFunc("/v1/notify", methodNotAllowed(http.MethodPost))
 		h.mux.HandleFunc("/v1/claude-code/hook", methodNotAllowed(http.MethodPost))
@@ -345,6 +349,14 @@ func (h *Handler) getTmux(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (h *Handler) getState(w http.ResponseWriter, r *http.Request) {
+	if h.options.State == nil {
+		writeStatusError(w, http.StatusServiceUnavailable, domain.NewError(domain.ErrorCodeDependency, "server.state", "state sampler is not configured", nil))
+		return
+	}
+	writeJSON(w, http.StatusOK, h.options.State.Snapshot())
 }
 
 func (h *Handler) getJob(w http.ResponseWriter, r *http.Request) {

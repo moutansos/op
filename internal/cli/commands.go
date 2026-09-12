@@ -16,6 +16,7 @@ import (
 	"github.com/moutansos/op/internal/domain"
 	"github.com/moutansos/op/internal/notify"
 	"github.com/moutansos/op/internal/server"
+	"github.com/moutansos/op/internal/state"
 	"github.com/moutansos/op/internal/tui"
 )
 
@@ -208,6 +209,28 @@ func (r *runner) runServe(ctx context.Context, args []string) error {
 	options.TLSCertFile = r.config.Server.TLSCertFile
 	options.TLSKeyFile = r.config.Server.TLSKeyFile
 	options.Version = r.options.Version.Version
+	instanceID, err := stateInstanceID(r.config.Server.State.InstanceID)
+	if err != nil {
+		return err
+	}
+	stateConfig := r.config.Server.State
+	parentToken := strings.TrimSpace(r.options.LookupEnv("OP_PARENT_TOKEN"))
+	if parentToken == "" {
+		parentToken = stateConfig.ParentToken
+	}
+	tracker, err := state.New(service, state.Options{
+		InstanceID: instanceID, ParentURL: stateConfig.ParentURL, ParentToken: parentToken,
+		RefreshInterval:   stateConfig.RefreshInterval.Duration,
+		HeartbeatInterval: stateConfig.HeartbeatInterval.Duration,
+		StaleAfter:        stateConfig.StaleAfter.Duration,
+	})
+	if err != nil {
+		return err
+	}
+	options.State = tracker
+	stateDone := make(chan struct{})
+	go func() { defer close(stateDone); tracker.Run(serveCtx) }()
+	defer func() { cancel(); <-stateDone }()
 	if r.config.Notifications.Enabled {
 		logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
 		options.Logger = logger
@@ -215,6 +238,7 @@ func (r *runner) runServe(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
+		notifyService.Notifier.SetObserver(tracker.Observe)
 		if r.config.Notifications.Ingest.Enabled {
 			options.NotifyIngest = notifyService.Ingest
 		}

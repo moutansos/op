@@ -727,3 +727,8 @@ dist/op version
 ```
 
 Without release ldflags, `op version` reports `dev`, `unknown`, and `unknown`.
+## Parent orchestrators
+
+`op serve` exposes authenticated, reconcilable project and agent state and can
+push full-state events to a parent such as muxplane. See
+[the synchronization protocol and configuration](docs/orchestrator-state.md).
