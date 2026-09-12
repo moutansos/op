@@ -273,6 +273,18 @@ func requireHTTPURL(field, value string) error {
 }
 
 func validateServer(server ServerConfig) error {
+	if server.State.RefreshInterval.Duration < 0 || server.State.HeartbeatInterval.Duration < 0 || server.State.StaleAfter.Duration < 0 {
+		return invalid("server.state", "intervals must not be negative")
+	}
+	if id := server.State.InstanceID; id != strings.TrimSpace(id) || len(id) > 255 || strings.IndexFunc(id, unicode.IsControl) >= 0 {
+		return invalid("server.state.instanceId", "must be a trimmed identifier of at most 255 characters")
+	}
+	if server.State.ParentURL != "" {
+		u, err := url.Parse(server.State.ParentURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
+			return invalid("server.state.parentUrl", "must be an HTTP(S) endpoint without userinfo or fragment")
+		}
+	}
 	host, portText, err := net.SplitHostPort(server.Listen)
 	if err != nil {
 		return invalid("server.listen", "must be a host:port address")

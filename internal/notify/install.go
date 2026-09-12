@@ -314,8 +314,12 @@ func writeCopilotHooks(hooksPath, forwardPath string) (string, error) {
 	next := map[string]any{
 		"version": 1,
 		"hooks": map[string]any{
-			"agentStop":    []any{entry("")},
-			"notification": []any{entry("permission_prompt|elicitation_dialog")},
+			"SessionStart":     []any{entry("")},
+			"SessionEnd":       []any{entry("")},
+			"UserPromptSubmit": []any{entry("")},
+			"PreToolUse":       []any{entry("")},
+			"agentStop":        []any{entry("")},
+			"notification":     []any{entry("permission_prompt|elicitation_dialog")},
 		},
 	}
 	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
@@ -328,7 +332,7 @@ func writeCopilotHooks(hooksPath, forwardPath string) (string, error) {
 	if err := os.WriteFile(hooksPath, append(data, '\n'), 0o644); err != nil {
 		return "", err
 	}
-	return "Registered agentStop and notification hooks in " + hooksPath, nil
+	return "Registered agentStop, notification, SessionStart, SessionEnd, UserPromptSubmit, and PreToolUse hooks in " + hooksPath, nil
 }
 
 func shellQuote(value string) string {

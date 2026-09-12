@@ -76,11 +76,12 @@ type rawNotificationsIngestConfig struct {
 }
 
 type rawServerConfig struct {
-	Enabled     *bool   `json:"enabled"`
-	Listen      *string `json:"listen"`
-	TokenFile   *string `json:"tokenFile"`
-	TLSCertFile *string `json:"tlsCertFile"`
-	TLSKeyFile  *string `json:"tlsKeyFile"`
+	State       *StateConfig `json:"state"`
+	Enabled     *bool        `json:"enabled"`
+	Listen      *string      `json:"listen"`
+	TokenFile   *string      `json:"tokenFile"`
+	TLSCertFile *string      `json:"tlsCertFile"`
+	TLSKeyFile  *string      `json:"tlsKeyFile"`
 }
 
 type rawActionsConfig struct {
@@ -291,6 +292,9 @@ func applyServer(target *ServerConfig, raw *rawServerConfig) {
 	if raw == nil {
 		return
 	}
+	if raw.State != nil {
+		target.State = *raw.State
+	}
 	if raw.Enabled != nil {
 		target.Enabled = *raw.Enabled
 	}
@@ -326,7 +330,11 @@ func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	collectObjectUnknown(notificationsObject(root["notifications"])["opencode2"], "notifications.opencode2", set("enabled", "baseUrl", "desktopBaseUrl", "password"), &warnings)
 	collectObjectUnknown(notificationsObject(root["notifications"])["ingest"], "notifications.ingest", set("enabled"), &warnings)
 	collectArrayUnknown(notificationsObject(root["notifications"])["providers"], "notifications.providers", set("type", "enabled", "webhookUrl", "url", "method", "headers", "token", "maxHops", "timeout"), "", nil, &warnings)
-	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "tokenFile", "tlsCertFile", "tlsKeyFile"), &warnings)
+	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "tokenFile", "tlsCertFile", "tlsKeyFile", "state"), &warnings)
+	var serverObject map[string]json.RawMessage
+	if json.Unmarshal(root["server"], &serverObject) == nil {
+		collectObjectUnknown(serverObject["state"], "server.state", set("instanceId", "parentUrl", "parentToken", "refreshInterval", "heartbeatInterval", "staleAfter"), &warnings)
+	}
 	collectObjectUnknown(root["actions"], "actions", set("guiEditors"), &warnings)
 	collectArrayUnknown(root["projectOpeners"], "projectOpeners", set("id", "name", "mode", "command", "runInPreferredShell"), "", nil, &warnings)
 	collectArrayUnknown(root["customEntries"], "customEntries", set("name", "paths"), "paths", set("win", "linux"), &warnings)

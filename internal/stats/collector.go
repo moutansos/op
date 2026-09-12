@@ -143,11 +143,20 @@ func (c *Collector) Collect(ctx context.Context, tmux domain.TmuxSnapshot) (doma
 	c.previousProcessCPU = currentCPU
 	c.previousProcessSampleAt = capturedAt
 
+	agentsError := ""
+	if c.detector == nil || c.capturer == nil {
+		agentsError = "agent detection is disabled or unavailable"
+	}
+	agentStates := c.collectAgents(ctx, capturedAt, tmux, foregrounds)
+	if err := ctx.Err(); err != nil {
+		return domain.StatsSnapshot{}, err
+	}
 	return domain.StatsSnapshot{
-		CapturedAt: capturedAt,
-		Host:       host,
-		Processes:  processes,
-		Agents:     c.collectAgents(ctx, capturedAt, tmux, foregrounds),
+		AgentsError: agentsError,
+		CapturedAt:  capturedAt,
+		Host:        host,
+		Processes:   processes,
+		Agents:      agentStates,
 	}, nil
 }
 
@@ -162,8 +171,11 @@ func (c *Collector) collectAgents(
 	tmux domain.TmuxSnapshot,
 	foregrounds map[string]agents.Foreground,
 ) []domain.PaneAgentState {
-	if c.detector == nil || tmux.Session == nil {
+	if c.detector == nil {
 		return nil
+	}
+	if tmux.Session == nil {
+		return c.detector.Classify(ctx, capturedAt, nil, c.capturer)
 	}
 	panes := make([]agents.Pane, 0, len(foregrounds))
 	for _, window := range tmux.Session.Windows {
