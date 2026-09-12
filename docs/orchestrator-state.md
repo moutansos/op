@@ -111,3 +111,17 @@ time), retain its last state as stale, and avoid treating it as an empty catalog
   stalls while HTTP remains reachable.
 
 See `/openapi.json` for the snapshot and event schemas.
+
+## Updating installed hooks
+
+After upgrading op, rerun `op notify install-claude` or
+`op notify install-copilot` (with your original `--target` if customized), then
+reload/restart the agent so it uses the updated hook registrations. The bundled
+hooks now forward session start/end, prompt submission, and pre-tool execution
+in addition to attention/idle events. These lifecycle payloads must contain a
+real session ID to become native state evidence; identity-less legacy
+notifications are still delivered but are not combined into an "unknown" agent.
+
+Question/permission resolutions carrying request IDs remove only that pending
+request. Another unresolved request in the session continues to report attention;
+an explicit busy/idle session status supersedes the prior attention observations.

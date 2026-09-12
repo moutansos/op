@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -212,5 +214,90 @@ func TestNativeSendDoesNotDuplicateObservation(t *testing.T) {
 	}
 	if o := receiveObservation(t, observations); o.SessionID != "barrier" {
 		t.Fatalf("duplicate observation = %+v", o)
+	}
+}
+
+func TestResolutionPreservesOtherPendingRequests(t *testing.T) {
+	for _, kind := range []Type{TypeQuestion, TypePermission} {
+		t.Run(string(kind), func(t *testing.T) {
+			sender := &observationSender{}
+			m := newMonitor(nil, sender, "", time.Hour, SourceOpenCode, nil)
+			for _, id := range []string{"A", "B"} {
+				_ = m.sendAttention(context.Background(), id, Notification{Type: kind, Source: SourceOpenCode, SessionID: "s", Question: id, PermissionTitle: id, Timestamp: time.Now()})
+			}
+			m.handlePayload(context.Background(), "/repo", json.RawMessage(`{"type":"`+string(kind)+`.replied","properties":{"sessionID":"s","requestID":"A"}}`))
+			o := sender.observations[len(sender.observations)-1]
+			if !o.Activity.NeedsAttention() || o.Detail != "B" {
+				t.Fatalf("cleared unresolved B: %+v", o)
+			}
+			m.handlePayload(context.Background(), "/repo", json.RawMessage(`{"type":"`+string(kind)+`.replied","properties":{"sessionID":"s","requestID":"B"}}`))
+			if o = sender.observations[len(sender.observations)-1]; o.Activity.NeedsAttention() || o.Notification != nil {
+				t.Fatalf("attention not cleared: %+v", o)
+			}
+		})
+	}
+}
+
+func TestIdentitylessHooksOnlyDeliverLegacyNotifications(t *testing.T) {
+	sender := &observationSender{}
+	ingest := NewIngest(sender, nil)
+	for _, directory := range []string{"/first", "/second"} {
+		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"hook_event_name":"Stop","cwd":"`+directory+`"}`))
+		w := httptest.NewRecorder()
+		ingest.HandleClaudeCodeHook(w, r)
+		if w.Code != 200 {
+			t.Fatal(w.Body.String())
+		}
+	}
+	if len(sender.observations) != 0 || len(sender.notifications) != 2 {
+		t.Fatalf("identityless hooks created evidence: %+v", sender)
+	}
+}
+
+func TestInstalledHooksIncludeLifecycleObservations(t *testing.T) {
+	for _, kind := range []InstallKind{InstallClaude, InstallCopilot} {
+		t.Run(string(kind), func(t *testing.T) {
+			home := t.TempDir()
+			target := filepath.Join(home, "plugin")
+			hooksPath := filepath.Join(target, "hooks", "hooks.json")
+			if _, err := InstallPlugin(InstallOptions{Kind: kind, TargetDir: target, HomeDir: home, HooksJSONPath: hooksPath}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(hooksPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var manifest struct {
+				Hooks map[string]json.RawMessage `json:"hooks"`
+			}
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				t.Fatal(err)
+			}
+			events := []string{"SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse"}
+			for _, event := range events {
+				if !strings.Contains(string(manifest.Hooks[event]), "forward.sh") {
+					t.Fatalf("missing installed lifecycle hook %s", event)
+				}
+				// PascalCase registrations select the documented snake_case
+				// payload, including hook_event_name, in both agents.
+				sender := &observationSender{}
+				ingest := NewIngest(sender, nil)
+				payload := `{"hook_event_name":"` + event + `","session_id":"s","timestamp":"2026-09-12T12:00:00Z","cwd":"/repo","tool_name":"Bash","tool_input":{"command":"pwd"}}`
+				request := httptest.NewRequest("POST", "/", strings.NewReader(payload))
+				response := httptest.NewRecorder()
+				if kind == InstallCopilot {
+					ingest.HandleCopilotCLIHook(response, request)
+				} else {
+					ingest.HandleClaudeCodeHook(response, request)
+				}
+				if response.Code != 200 || len(sender.observations) != 1 || len(sender.notifications) != 0 {
+					t.Fatalf("installed %s: status %d, %+v", event, response.Code, sender)
+				}
+				observation := sender.observations[0]
+				if observation.Terminated != (event == "SessionEnd") || observation.Activity.NeedsAttention() {
+					t.Fatalf("misclassified lifecycle %s: %+v", event, observation)
+				}
+			}
+		})
 	}
 }
