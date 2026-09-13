@@ -40,6 +40,8 @@ const (
 
 // Options configures both the HTTP handler and the listening server.
 type Options struct {
+	// OnListening starts application-owned background work after binding succeeds.
+	OnListening        func()
 	ListenAddress      string
 	Token              string
 	TLSCertFile        string
@@ -730,23 +732,28 @@ func (s *Server) HTTPServer() *http.Server { return s.http }
 
 // ListenAndServe starts HTTP or HTTPS according to Options.
 func (s *Server) ListenAndServe() error {
-	if s.options.TLSCertFile != "" {
-		return s.http.ListenAndServeTLS(s.options.TLSCertFile, s.options.TLSKeyFile)
+	listener, err := net.Listen("tcp", s.options.ListenAddress)
+	if err != nil {
+		return err
 	}
-	return s.http.ListenAndServe()
+	defer listener.Close()
+	return s.Serve(listener)
 }
 
 // Serve serves an existing listener, applying TLS when configured.
 func (s *Server) Serve(listener net.Listener) error {
-	if s.options.TLSCertFile == "" {
-		return s.http.Serve(listener)
+	if s.options.TLSCertFile != "" {
+		certificate, err := tls.LoadX509KeyPair(s.options.TLSCertFile, s.options.TLSKeyFile)
+		if err != nil {
+			return err
+		}
+		configuration := &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+		listener = tls.NewListener(listener, configuration)
 	}
-	certificate, err := tls.LoadX509KeyPair(s.options.TLSCertFile, s.options.TLSKeyFile)
-	if err != nil {
-		return err
+	if s.options.OnListening != nil {
+		s.options.OnListening()
 	}
-	configuration := &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
-	return s.http.Serve(tls.NewListener(listener, configuration))
+	return s.http.Serve(listener)
 }
 
 // Shutdown stops HTTP traffic and cancels asynchronous jobs.

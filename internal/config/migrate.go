@@ -76,6 +76,7 @@ type rawNotificationsIngestConfig struct {
 }
 
 type rawServerConfig struct {
+	Token       *string      `json:"token"`
 	State       *StateConfig `json:"state"`
 	Enabled     *bool        `json:"enabled"`
 	Listen      *string      `json:"listen"`
@@ -295,6 +296,9 @@ func applyServer(target *ServerConfig, raw *rawServerConfig) {
 	if raw.State != nil {
 		target.State = *raw.State
 	}
+	if raw.Token != nil {
+		target.Token = *raw.Token
+	}
 	if raw.Enabled != nil {
 		target.Enabled = *raw.Enabled
 	}
@@ -330,7 +334,7 @@ func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	collectObjectUnknown(notificationsObject(root["notifications"])["opencode2"], "notifications.opencode2", set("enabled", "baseUrl", "desktopBaseUrl", "password"), &warnings)
 	collectObjectUnknown(notificationsObject(root["notifications"])["ingest"], "notifications.ingest", set("enabled"), &warnings)
 	collectArrayUnknown(notificationsObject(root["notifications"])["providers"], "notifications.providers", set("type", "enabled", "webhookUrl", "url", "method", "headers", "token", "maxHops", "timeout"), "", nil, &warnings)
-	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "tokenFile", "tlsCertFile", "tlsKeyFile", "state"), &warnings)
+	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "token", "tokenFile", "tlsCertFile", "tlsKeyFile", "state"), &warnings)
 	var serverObject map[string]json.RawMessage
 	if json.Unmarshal(root["server"], &serverObject) == nil {
 		collectObjectUnknown(serverObject["state"], "server.state", set("instanceId", "parentUrl", "parentToken", "refreshInterval", "heartbeatInterval", "staleAfter"), &warnings)

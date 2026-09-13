@@ -24,3 +24,13 @@ func TestStateConfigurationMigration(t *testing.T) {
 		}
 	}
 }
+
+func TestInlineServerTokenMigration(t *testing.T) {
+	cfg, warnings, err := Migrate([]byte(`{"server":{"enabled":true,"token":"configured-api-token"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 || !cfg.Server.Enabled || cfg.Server.Token != "configured-api-token" {
+		t.Fatalf("inline server credentials lost: %+v, warnings=%v", cfg.Server, warnings)
+	}
+}

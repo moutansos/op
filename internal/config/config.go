@@ -152,6 +152,7 @@ type NotificationProviderConfig struct {
 }
 
 type ServerConfig struct {
+	Token       string      `json:"token,omitempty"`
 	State       StateConfig `json:"state"`
 	Enabled     bool        `json:"enabled"`
 	Listen      string      `json:"listen"`

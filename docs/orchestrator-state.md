@@ -1,6 +1,7 @@
 # Parent orchestrator synchronization
 
-`op serve` samples the local catalog, managed tmux windows, and the existing
+The dashboard (with `server.enabled: true`) and standalone `op serve` host the
+same HTTP API and sample the local catalog, managed tmux windows, and the existing
 agent detector independently of the dashboard. `GET /v1/state` returns the
 latest cached snapshot using the same bearer authentication as `/v1/projects`.
 Reading the endpoint does not advance the detector's temporal baseline.
@@ -12,8 +13,9 @@ Merge this example into your op configuration:
 ```json
 {
   "server": {
+    "enabled": true,
     "listen": "127.0.0.1:8787",
-    "tokenFile": "/home/ben/.config/op/api-token",
+    "token": "replace-with-your-api-token",
     "state": {
       "instanceId": "workstation-main",
       "parentUrl": "https://muxplane.example/v1/op/state",
@@ -27,12 +29,26 @@ Merge this example into your op configuration:
 ```
 
 Set `OP_PARENT_TOKEN` for the parent's bearer credential; it overrides
-`server.state.parentToken`. `OP_API_TOKEN` (or `server.tokenFile`) authenticates
+`server.state.parentToken`. Incoming authentication uses the first non-empty
+value of `OP_API_TOKEN`, `server.token`, and the contents of `server.tokenFile`.
+The incoming token authenticates
 incoming op requests separately. `parentUrl` is the **complete receiving
 endpoint**, implemented by muxplane, not an endpoint served by op. If omitted,
 sampling and `GET /v1/state` remain available without forwarding. Existing
 notification providers, including the parent's `/v1/notify`, remain independently
 configured and retain their three-type notification contract.
+
+`server.enabled` controls dashboard hosting and defaults to false. Enable it to
+serve for the lifetime of the dashboard, including a dashboard started by
+`op --no-target`. Exiting the dashboard shuts down its listener and background
+work. `op serve` always hosts independently, regardless of `server.enabled`.
+Both modes share the same authentication, notification ingest, sampling, and
+parent forwarding configuration. If the configured address is already occupied,
+the dashboard prints a message and continues as a UI without starting its own
+sampler or forwarding runtime. A second standalone `op serve` reports the bind
+error. The dashboard does not take over later if that listener exits; restart it
+to take ownership. Use distinct ports and instance IDs for intentional separate
+servers.
 
 Set a distinct `instanceId` for every concurrently running op instance. Without
 one, op generates a random identity once in the platform user configuration
