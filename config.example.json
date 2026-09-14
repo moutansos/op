@@ -95,6 +95,7 @@
     "state": {
       "instanceId": "",
       "parentUrl": "",
+      "parentEventsUrl": "",
       "refreshInterval": "2s",
       "heartbeatInterval": "10s",
       "staleAfter": "1m"

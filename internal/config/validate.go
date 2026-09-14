@@ -285,6 +285,12 @@ func validateServer(server ServerConfig) error {
 			return invalid("server.state.parentUrl", "must be an HTTP(S) endpoint without userinfo or fragment")
 		}
 	}
+	if server.State.ParentEventsURL != "" {
+		u, err := url.Parse(server.State.ParentEventsURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" {
+			return invalid("server.state.parentEventsUrl", "must be an HTTP(S) endpoint without userinfo or fragment")
+		}
+	}
 	host, portText, err := net.SplitHostPort(server.Listen)
 	if err != nil {
 		return invalid("server.listen", "must be a host:port address")

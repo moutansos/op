@@ -48,7 +48,9 @@ dependency call receives a 10-second deadline.
 ## Forwarding semantics
 
 `ParentURL` is the exact POST endpoint, including its configured path and query.
-No path is appended. `ParentToken` becomes a Bearer authorization header.
+No path is appended. `ParentEventsURL` is the exact SSE GET endpoint; when empty
+it is derived from `ParentURL` (`/state` → `/events`, otherwise `/events`
+appended). `ParentToken` becomes a Bearer authorization header on both.
 Redirects are not followed. Every non-2xx result or transport error retries the
 same immutable bytes and event ID with exponential backoff from 100 milliseconds
 to a 30-second cap. HTTP attempts have a 10-second timeout and inherit cancellation.

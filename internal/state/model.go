@@ -16,8 +16,35 @@ type Options struct {
 	HeartbeatInterval time.Duration
 	StaleAfter        time.Duration
 	ParentURL         string
+	ParentEventsURL   string
 	ParentToken       string
 }
+
+// LinkState is the dashboard-facing parent connection state.
+type LinkState string
+
+const (
+	LinkDisabled     LinkState = ""
+	LinkConnecting   LinkState = "connecting"
+	LinkConnected    LinkState = "connected"
+	LinkReconnecting LinkState = "reconnecting"
+	LinkError        LinkState = "error"
+)
+
+// Link is the current outbound parent connection. Enabled when ParentURL is set.
+type Link struct {
+	State     LinkState `json:"state"`
+	Detail    string    `json:"detail,omitempty"`
+	EventsURL string    `json:"eventsUrl,omitempty"`
+	LastPush  time.Time `json:"lastPush,omitempty"`
+	LastEvent time.Time `json:"lastEvent,omitempty"`
+}
+
+const (
+	CommandOpenProject = "command.open_project"
+	CommandSelectPane  = "command.select_pane"
+	CommandPing        = "command.ping"
+)
 
 // Section retains its last successful data on error. Available means a sample
 // has succeeded at least once, not that the dependency is currently reachable.

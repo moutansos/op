@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -141,6 +142,65 @@ func TestDashboardServerFailureCancelsUI(t *testing.T) {
 	defer cancel()
 	if code := Run(ctx, []string{"dashboard"}, options); code == 0 {
 		t.Fatal("server error lost")
+	}
+}
+
+func TestDashboardParentLinkWithoutLocalListener(t *testing.T) {
+	events := make(chan struct{})
+	parent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/op/state" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer parent-token" {
+			t.Errorf("missing parent token: %s", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		flusher.Flush()
+		select {
+		case events <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+	}))
+	defer parent.Close()
+	runtime := newTestRuntime()
+	options := runtime.options()
+	load := options.LoadConfig
+	options.LoadConfig = func(path string) (config.LoadResult, error) {
+		result, err := load(path)
+		result.Config.Server.Enabled = false
+		result.Config.Server.State.ParentURL = parent.URL + "/v1/op/state"
+		result.Config.Server.State.ParentToken = "parent-token"
+		return result, err
+	}
+	var status func() tui.ParentLink
+	options.RunTUI = func(ctx context.Context, _ domain.Service, opts tui.Options) error {
+		status = opts.ParentStatus
+		if status == nil {
+			t.Fatal("dashboard missing parent status callback")
+		}
+		select {
+		case <-events:
+		case <-time.After(2 * time.Second):
+			t.Fatal("parent SSE was not subscribed")
+		}
+		deadline := time.After(2 * time.Second)
+		for status().State != "connected" {
+			select {
+			case <-deadline:
+				t.Fatalf("status = %+v", status())
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		return nil
+	}
+	if code := Run(context.Background(), []string{"dashboard"}, options); code != 0 {
+		t.Fatalf("exit %d: %s", code, runtime.stderr.String())
+	}
+	if runtime.serverCalls != 0 {
+		t.Fatalf("unexpected local listener: %d", runtime.serverCalls)
 	}
 }
 

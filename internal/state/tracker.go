@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,15 +23,22 @@ import (
 const maxNativeSessions = 1024
 
 type Tracker struct {
-	service    domain.Service
-	options    Options
-	mu         sync.Mutex
-	snapshot   Snapshot
-	native     map[string]Agent
-	paneAgents []Agent
-	pending    chan []byte
-	client     *http.Client
-	running    bool
+	service     domain.Service
+	options     Options
+	mu          sync.Mutex
+	snapshot    Snapshot
+	native      map[string]Agent
+	paneAgents  []Agent
+	pending     chan []byte
+	client      *http.Client
+	sseClient   *http.Client
+	running     bool
+	link        Link
+	seenIDs     map[string]struct{}
+	seenOrder   []string
+	lastEvent   string
+	lastPushAt  time.Time
+	lastPushErr string
 }
 
 func New(service domain.Service, options Options) (*Tracker, error) {
@@ -55,16 +61,31 @@ func New(service domain.Service, options Options) (*Tracker, error) {
 		options.StaleAfter = 2 * time.Minute
 	}
 	if options.ParentURL != "" {
-		u, err := url.Parse(options.ParentURL)
-		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Fragment != "" {
-			return nil, errors.New("state: parent URL must be an absolute HTTP(S) endpoint without credentials or fragment")
+		if err := validateParentEndpoint("parent URL", options.ParentURL); err != nil {
+			return nil, err
 		}
 	}
+	eventsURL, err := ResolveEventsURL(options.ParentURL, options.ParentEventsURL)
+	if err != nil {
+		return nil, err
+	}
+	options.ParentEventsURL = eventsURL
 	var epoch [16]byte
 	if _, err := rand.Read(epoch[:]); err != nil {
 		return nil, err
 	}
-	t := &Tracker{service: service, options: options, native: make(map[string]Agent), pending: make(chan []byte, 1), client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	t := &Tracker{
+		service:   service,
+		options:   options,
+		native:    make(map[string]Agent),
+		pending:   make(chan []byte, 1),
+		seenIDs:   make(map[string]struct{}),
+		client:    &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		sseClient: &http.Client{Timeout: 0, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{ResponseHeaderTimeout: 15 * time.Second, IdleConnTimeout: 0}},
+	}
+	if eventsURL != "" {
+		t.link = Link{State: LinkConnecting, EventsURL: eventsURL, Detail: "connecting to parent"}
+	}
 	hostname, _ := os.Hostname()
 	t.snapshot = Snapshot{Version: 1, InstanceID: options.InstanceID, Hostname: hostname, Epoch: hex.EncodeToString(epoch[:])}
 	t.snapshot.Projects.Data = []Project{}
@@ -87,6 +108,9 @@ func (t *Tracker) Run(ctx context.Context) error {
 	go t.sampleLoop(ctx)
 	if t.options.ParentURL != "" {
 		go t.forward(ctx)
+	}
+	if t.options.ParentEventsURL != "" {
+		go t.subscribe(ctx)
 	}
 	heartbeat := time.NewTicker(t.options.HeartbeatInterval)
 	defer heartbeat.Stop()
@@ -342,6 +366,22 @@ func (t *Tracker) refreshLocked(now time.Time) {
 	}
 	sort.Slice(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
 	t.snapshot.Agents.Data = agents
+}
+
+// Connection returns the current outbound parent link. It is safe before Run.
+func (t *Tracker) Connection() Link {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	link := t.link
+	if t.options.ParentURL == "" {
+		return Link{}
+	}
+	link.EventsURL = t.options.ParentEventsURL
+	link.LastPush = t.lastPushAt
+	if t.lastPushErr != "" && link.State == LinkConnected {
+		link.Detail = "push failed: " + t.lastPushErr
+	}
+	return link
 }
 
 // Snapshot returns an isolated copy. Freshness is evaluated at read time even

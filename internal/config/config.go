@@ -165,6 +165,7 @@ type ServerConfig struct {
 type StateConfig struct {
 	InstanceID        string   `json:"instanceId,omitempty"`
 	ParentURL         string   `json:"parentUrl,omitempty"`
+	ParentEventsURL   string   `json:"parentEventsUrl,omitempty"`
 	ParentToken       string   `json:"parentToken,omitempty"`
 	RefreshInterval   Duration `json:"refreshInterval,omitempty"`
 	HeartbeatInterval Duration `json:"heartbeatInterval,omitempty"`

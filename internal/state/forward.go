@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -41,12 +42,18 @@ func (t *Tracker) forward(ctx context.Context) {
 				_ = resp.Body.Close()
 			}
 			if ok {
+				t.recordPush(nil)
 				if retried {
 					t.mu.Lock()
 					t.publishLocked(time.Now())
 					t.mu.Unlock()
 				}
 				break
+			}
+			if err != nil {
+				t.recordPush(err)
+			} else {
+				t.recordPush(fmt.Errorf("parent returned HTTP %d", resp.StatusCode))
 			}
 			retried = true
 			timer := time.NewTimer(backoff)

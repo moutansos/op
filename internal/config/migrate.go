@@ -337,7 +337,7 @@ func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "token", "tokenFile", "tlsCertFile", "tlsKeyFile", "state"), &warnings)
 	var serverObject map[string]json.RawMessage
 	if json.Unmarshal(root["server"], &serverObject) == nil {
-		collectObjectUnknown(serverObject["state"], "server.state", set("instanceId", "parentUrl", "parentToken", "refreshInterval", "heartbeatInterval", "staleAfter"), &warnings)
+		collectObjectUnknown(serverObject["state"], "server.state", set("instanceId", "parentUrl", "parentEventsUrl", "parentToken", "refreshInterval", "heartbeatInterval", "staleAfter"), &warnings)
 	}
 	collectObjectUnknown(root["actions"], "actions", set("guiEditors"), &warnings)
 	collectArrayUnknown(root["projectOpeners"], "projectOpeners", set("id", "name", "mode", "command", "runInPreferredShell"), "", nil, &warnings)

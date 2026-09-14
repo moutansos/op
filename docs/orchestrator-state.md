@@ -19,6 +19,7 @@ Merge this example into your op configuration:
     "state": {
       "instanceId": "workstation-main",
       "parentUrl": "https://muxplane.example/v1/op/state",
+      "parentEventsUrl": "https://muxplane.example/v1/op/events",
       "refreshInterval": "2s",
       "heartbeatInterval": "10s",
       "staleAfter": "1m"
@@ -32,11 +33,20 @@ Set `OP_PARENT_TOKEN` for the parent's bearer credential; it overrides
 `server.state.parentToken`. Incoming authentication uses the first non-empty
 value of `OP_API_TOKEN`, `server.token`, and the contents of `server.tokenFile`.
 The incoming token authenticates
-incoming op requests separately. `parentUrl` is the **complete receiving
-endpoint**, implemented by muxplane, not an endpoint served by op. If omitted,
-sampling and `GET /v1/state` remain available without forwarding. Existing
-notification providers, including the parent's `/v1/notify`, remain independently
+incoming op requests separately. `parentUrl` is the **complete snapshot POST
+endpoint**, implemented by muxplane, not an endpoint served by op. When it is
+set, op also opens an outbound SSE subscription to `parentEventsUrl` (default:
+the snapshot URL with a trailing `/state` replaced by `/events`, otherwise
+`/events` appended). Muxplane can send commands down that stream; op does not
+need an inbound port for parent control. If `parentUrl` is omitted, sampling
+and `GET /v1/state` remain available without forwarding. Existing notification
+providers, including the parent's `/v1/notify`, remain independently
 configured and retain their three-type notification contract.
+
+The dashboard shows a muxplane connection indicator whenever this process owns
+the parent link: connecting, connected, reconnecting, or error. Setting
+`parentUrl` without `server.enabled` still starts outbound snapshot posting and
+the SSE bus from the dashboard, without hosting the local HTTP API.
 
 `server.enabled` controls dashboard hosting and defaults to false. Enable it to
 serve for the lifetime of the dashboard, including a dashboard started by
@@ -125,6 +135,31 @@ time), retain its last state as stale, and avoid treating it as an empty catalog
   authorizes removal. Disabled/unavailable detection is distinguished from an
   empty successful agent sample. Parents should also age timestamps if sampling
   stalls while HTTP remains reachable.
+
+## Command bus
+
+Op `GET`s `parentEventsUrl` as `text/event-stream` with the parent bearer token,
+`X-Op-Instance-Id`, and `Last-Event-ID` after reconnects. Muxplane should send
+periodic SSE comments as keepalives. 401/403 responses are treated as errors and
+retried with the same backoff cap as snapshot posting. Redirects are rejected.
+
+Command events are JSON in `data:` lines:
+
+```json
+{
+  "version": 1,
+  "instanceId": "workstation-main",
+  "eventId": "cmd-1",
+  "type": "command.open_project",
+  "payload": { "projectId": "catalog-id", "profile": "nvim", "newInstance": false }
+}
+```
+
+Supported types: `command.open_project`, `command.select_pane`, `command.ping`.
+`projectId` / `paneId` may be the namespaced state IDs or op catalog / native
+tmux IDs. Commands for a different `instanceId` are ignored. Duplicate `eventId`
+values are ignored. Successful opens appear in the next snapshot; op does not
+require muxplane to dial back.
 
 See `/openapi.json` for the snapshot and event schemas.
 

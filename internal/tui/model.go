@@ -81,6 +81,8 @@ type Model struct {
 	tmuxCursorPaneID string
 	stats            domain.StatsSnapshot
 	haveStats        bool
+
+	parent ParentLink
 }
 
 // NewModel builds a dashboard model without performing I/O.
@@ -98,7 +100,7 @@ func NewModel(ctx context.Context, service domain.Service, options Options) Mode
 	projects.SetShowStatusBar(false)
 	projects.DisableQuitKeybindings()
 
-	return Model{
+	model := Model{
 		ctx:                ctx,
 		cancel:             cancel,
 		service:            service,
@@ -110,6 +112,10 @@ func NewModel(ctx context.Context, service domain.Service, options Options) Mode
 		statsRefreshing:    true,
 		status:             "Loading dashboard snapshots...",
 	}
+	if options.ParentStatus != nil {
+		model.parent = options.ParentStatus()
+	}
+	return model
 }
 
 // Init focuses project filtering and starts the independent refresh loops.
@@ -117,7 +123,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		func() tea.Msg { return tea.FocusMsg{} },
 		m.loadProjectsCmd(), m.loadTmuxCmd(), m.loadStatsCmd(),
-		m.projectTickCmd(), m.tmuxTickCmd(), m.statsTickCmd(),
+		m.projectTickCmd(), m.tmuxTickCmd(), m.statsTickCmd(), m.parentTickCmd(),
 	)
 }
 
@@ -239,6 +245,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.loadStatsCmd())
 		}
 		return m, tea.Batch(cmds...)
+
+	case parentTickMsg:
+		if m.options.ParentStatus != nil {
+			m.parent = m.options.ParentStatus()
+		}
+		return m, m.parentTickCmd()
 
 	case selectPaneFinishedMsg:
 		m.operation = ""

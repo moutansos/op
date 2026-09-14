@@ -170,22 +170,32 @@ func (r *runner) runDashboardTUI(ctx context.Context, service Service) error {
 	if r.config.Server.Enabled {
 		return r.runServingDashboard(ctx, service)
 	}
-	return r.runDashboardUI(ctx, service)
+	if r.config.Server.State.ParentURL != "" {
+		return r.runParentDashboard(ctx, service)
+	}
+	return r.runDashboardUI(ctx, service, nil)
 }
 
-func (r *runner) runDashboardUI(ctx context.Context, service Service) error {
+func (r *runner) runDashboardUI(ctx context.Context, service Service, tracker *state.Tracker) error {
 	openers := make([]tui.ProjectOpener, 0, len(r.config.ProjectOpeners))
 	for _, opener := range r.config.ProjectOpeners {
 		openers = append(openers, tui.ProjectOpener{ID: opener.ID, Name: opener.Name, Mode: opener.Mode})
 	}
-	return r.options.RunTUI(ctx, service, tui.Options{
+	options := tui.Options{
 		DefaultProfile:         r.config.Tmux.DefaultProfile,
 		ProjectOpeners:         openers,
 		ProjectRefreshInterval: r.config.Stats.TmuxRefreshInterval.Duration,
 		TmuxRefreshInterval:    r.config.Stats.TmuxRefreshInterval.Duration,
 		StatsRefreshInterval:   r.config.Stats.RefreshInterval.Duration,
 		SnapshotCachePath:      r.snapshotCachePath(),
-	})
+	}
+	if tracker != nil && tracker.Connection().EventsURL != "" {
+		options.ParentStatus = func() tui.ParentLink {
+			link := tracker.Connection()
+			return tui.ParentLink{State: string(link.State), Detail: link.Detail}
+		}
+	}
+	return r.options.RunTUI(ctx, service, options)
 }
 
 func (r *runner) runServe(ctx context.Context, args []string) error {
@@ -206,8 +216,60 @@ func (r *runner) runServe(ctx context.Context, args []string) error {
 	return r.serveRuntime(serveCtx, service, nil)
 }
 
+func (r *runner) newStateTracker(service domain.Service) (*state.Tracker, *notify.Service, error) {
+	instanceID, err := stateInstanceID(r.config.Server.State.InstanceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	stateConfig := r.config.Server.State
+	parentToken := strings.TrimSpace(r.options.LookupEnv("OP_PARENT_TOKEN"))
+	if parentToken == "" {
+		parentToken = stateConfig.ParentToken
+	}
+	tracker, err := state.New(service, state.Options{
+		InstanceID: instanceID, ParentURL: stateConfig.ParentURL, ParentEventsURL: stateConfig.ParentEventsURL, ParentToken: parentToken,
+		RefreshInterval:   stateConfig.RefreshInterval.Duration,
+		HeartbeatInterval: stateConfig.HeartbeatInterval.Duration,
+		StaleAfter:        stateConfig.StaleAfter.Duration,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if !r.config.Notifications.Enabled {
+		return tracker, nil, nil
+	}
+	logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
+	notifyService, err := notify.New(notifyOptions(r.config.Notifications, logger))
+	if err != nil {
+		return nil, nil, err
+	}
+	notifyService.Notifier.SetObserver(tracker.Observe)
+	return tracker, notifyService, nil
+}
+
+func (r *runner) runParentWork(ctx context.Context, tracker *state.Tracker, notifyService *notify.Service) {
+	if notifyService != nil {
+		logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
+		if r.config.Notifications.OpenCode.BaseURL != "" {
+			go func() {
+				if err := notifyService.WatchOpenCode(ctx); err != nil && ctx.Err() == nil {
+					logger.Error("opencode notification watcher stopped", "err", err)
+				}
+			}()
+		}
+		if r.config.Notifications.OpenCode2.Enabled {
+			go func() {
+				if err := notifyService.WatchOpenCode2(ctx); err != nil && ctx.Err() == nil {
+					logger.Error("opencode2 notification watcher stopped", "err", err)
+				}
+			}()
+		}
+	}
+	_ = tracker.Run(ctx)
+}
+
 // serveRuntime is shared by the dashboard and the standalone serve command.
-func (r *runner) serveRuntime(ctx context.Context, service domain.Service, ready func()) error {
+func (r *runner) serveRuntime(ctx context.Context, service domain.Service, ready func(*state.Tracker)) error {
 	token, err := r.apiToken()
 	if err != nil {
 		return err
@@ -223,62 +285,23 @@ func (r *runner) serveRuntime(ctx context.Context, service domain.Service, ready
 	options.TLSCertFile = r.config.Server.TLSCertFile
 	options.TLSKeyFile = r.config.Server.TLSKeyFile
 	options.Version = r.options.Version.Version
-	instanceID, err := stateInstanceID(r.config.Server.State.InstanceID)
-	if err != nil {
-		return err
-	}
-	stateConfig := r.config.Server.State
-	parentToken := strings.TrimSpace(r.options.LookupEnv("OP_PARENT_TOKEN"))
-	if parentToken == "" {
-		parentToken = stateConfig.ParentToken
-	}
-	tracker, err := state.New(service, state.Options{
-		InstanceID: instanceID, ParentURL: stateConfig.ParentURL, ParentToken: parentToken,
-		RefreshInterval:   stateConfig.RefreshInterval.Duration,
-		HeartbeatInterval: stateConfig.HeartbeatInterval.Duration,
-		StaleAfter:        stateConfig.StaleAfter.Duration,
-	})
+	tracker, notifyService, err := r.newStateTracker(service)
 	if err != nil {
 		return err
 	}
 	options.State = tracker
 	stateDone := make(chan struct{})
-	var notifyService *notify.Service
 	logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
 	options.Logger = logger
-	if r.config.Notifications.Enabled {
-		notifyService, err = notify.New(notifyOptions(r.config.Notifications, logger))
-		if err != nil {
-			return err
-		}
-		notifyService.Notifier.SetObserver(tracker.Observe)
-		if r.config.Notifications.Ingest.Enabled {
-			options.NotifyIngest = notifyService.Ingest
-		}
+	if notifyService != nil && r.config.Notifications.Ingest.Enabled {
+		options.NotifyIngest = notifyService.Ingest
 	}
 	started := false
 	options.OnListening = func() {
 		started = true
-		go func() { defer close(stateDone); _ = tracker.Run(serveCtx) }()
+		go func() { defer close(stateDone); r.runParentWork(serveCtx, tracker, notifyService) }()
 		if ready != nil {
-			ready()
-		}
-		if notifyService == nil {
-			return
-		}
-		if r.config.Notifications.OpenCode.BaseURL != "" {
-			go func() {
-				if err := notifyService.WatchOpenCode(serveCtx); err != nil && serveCtx.Err() == nil {
-					logger.Error("opencode notification watcher stopped", "err", err)
-				}
-			}()
-		}
-		if r.config.Notifications.OpenCode2.Enabled {
-			go func() {
-				if err := notifyService.WatchOpenCode2(serveCtx); err != nil && serveCtx.Err() == nil {
-					logger.Error("opencode2 notification watcher stopped", "err", err)
-				}
-			}()
+			ready(tracker)
 		}
 	}
 	defer func() {

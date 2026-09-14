@@ -751,6 +751,29 @@ func TestCreateCloneAndOpenerFormsScheduleCommands(t *testing.T) {
 	}
 }
 
+func TestDashboardShowsParentConnectionIndicator(t *testing.T) {
+	service := &fakeService{}
+	model := NewModel(context.Background(), service, Options{
+		ProjectRefreshInterval: time.Hour,
+		TmuxRefreshInterval:    time.Hour,
+		StatsRefreshInterval:   time.Hour,
+		ParentStatus: func() ParentLink {
+			return ParentLink{State: "connected", Detail: "connected"}
+		},
+	})
+	model = updateTestModel(model, tea.WindowSizeMsg{Width: 120, Height: 35})
+	view := model.View()
+	if !strings.Contains(view, "muxplane connected") {
+		t.Fatalf("missing parent indicator:\n%s", view)
+	}
+	model.options.ParentStatus = func() ParentLink { return ParentLink{State: "error", Detail: "401"} }
+	model = updateTestModel(model, parentTickMsg{})
+	view = model.View()
+	if !strings.Contains(view, "muxplane error") || !strings.Contains(view, "401") {
+		t.Fatalf("error indicator not updated:\n%s", view)
+	}
+}
+
 func TestConfiguredProjectOpenerSelection(t *testing.T) {
 	service := &fakeService{}
 	model := NewModel(context.Background(), service, Options{
