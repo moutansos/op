@@ -188,6 +188,7 @@ func (h *Handler) routes() {
 
 	h.mux.Handle("GET /v1/projects", h.authenticate(http.HandlerFunc(h.listProjects)))
 	h.mux.Handle("GET /v1/tmux", h.authenticate(http.HandlerFunc(h.getTmux)))
+	h.mux.Handle("POST /v1/tmux/panes/{id}/select", h.authenticate(http.HandlerFunc(h.selectPane)))
 	h.mux.Handle("GET /v1/jobs/{id}", h.authenticate(http.HandlerFunc(h.getJob)))
 	h.mux.Handle("POST /v1/projects", h.authenticate(http.HandlerFunc(h.createProject)))
 	h.mux.Handle("POST /v1/projects/clone", h.authenticate(http.HandlerFunc(h.cloneProject)))
@@ -215,6 +216,7 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("/v1/jobs/{id}", methodNotAllowed(http.MethodGet))
 	h.mux.HandleFunc("/v1/health", methodNotAllowed(http.MethodGet))
 	h.mux.HandleFunc("/v1/tmux", methodNotAllowed(http.MethodGet))
+	h.mux.HandleFunc("/v1/tmux/panes/{id}/select", methodNotAllowed(http.MethodPost))
 	if h.options.NotifyIngest != nil {
 		h.mux.HandleFunc("/v1/notify", methodNotAllowed(http.MethodPost))
 		h.mux.HandleFunc("/v1/claude-code/hook", methodNotAllowed(http.MethodPost))
@@ -345,6 +347,19 @@ func (h *Handler) getTmux(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (h *Handler) selectPane(w http.ResponseWriter, r *http.Request) {
+	paneID, ok := pathPaneID(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.service.SelectPane(r.Context(), domain.SelectPaneRequest{PaneID: paneID})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) getJob(w http.ResponseWriter, r *http.Request) {
@@ -505,6 +520,15 @@ func pathProjectID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	if id == "" || len(id) > 512 || strings.IndexFunc(id, unicode.IsControl) >= 0 {
 		writeError(w, domain.FieldError(domain.ErrorCodeInvalidArgument, "server.request", "projectId", "must be a valid project ID"))
+		return "", false
+	}
+	return id, true
+}
+
+func pathPaneID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if len(id) < 2 || id[0] != '%' || strings.IndexFunc(id, unicode.IsControl) >= 0 {
+		writeError(w, domain.FieldError(domain.ErrorCodeInvalidArgument, "server.request", "paneId", "must be a canonical tmux pane ID"))
 		return "", false
 	}
 	return id, true

@@ -28,6 +28,7 @@ type fakeService struct {
 	createWorktree func(context.Context, domain.CreateWorktreeRequest) (domain.CreateWorktreeResult, error)
 	openProject    func(context.Context, domain.OpenProjectRequest) (domain.OpenProjectResult, error)
 	getTmux        func(context.Context) (domain.TmuxSnapshot, error)
+	selectPane     func(context.Context, domain.SelectPaneRequest) (domain.SelectPaneResult, error)
 }
 
 func (f *fakeService) ListProjects(ctx context.Context) ([]domain.Project, error) {
@@ -65,7 +66,10 @@ func (f *fakeService) OpenProject(ctx context.Context, request domain.OpenProjec
 	return domain.OpenProjectResult{}, nil
 }
 
-func (f *fakeService) SelectPane(context.Context, domain.SelectPaneRequest) (domain.SelectPaneResult, error) {
+func (f *fakeService) SelectPane(ctx context.Context, request domain.SelectPaneRequest) (domain.SelectPaneResult, error) {
+	if f.selectPane != nil {
+		return f.selectPane(ctx, request)
+	}
 	return domain.SelectPaneResult{}, nil
 }
 
@@ -223,6 +227,12 @@ func TestRoutesDelegateDomainRequests(t *testing.T) {
 		getTmux: func(context.Context) (domain.TmuxSnapshot, error) {
 			return domain.TmuxSnapshot{Session: &domain.TmuxSession{ID: "$1", Name: "code"}}, nil
 		},
+		selectPane: func(_ context.Context, request domain.SelectPaneRequest) (domain.SelectPaneResult, error) {
+			if request.PaneID != "%12" {
+				t.Fatalf("unexpected select request: %#v", request)
+			}
+			return domain.SelectPaneResult{Window: domain.TmuxWindow{ID: "@3", Name: "project"}, Pane: domain.TmuxPane{ID: "%12", Active: true}}, nil
+		},
 	}
 	handler := newTestHandler(t, service, nil)
 
@@ -241,6 +251,14 @@ func TestRoutesDelegateDomainRequests(t *testing.T) {
 	tmux := request(handler, http.MethodGet, "/v1/tmux", "", testToken, "")
 	if tmux.Code != http.StatusOK || !strings.Contains(tmux.Body.String(), `"name":"code"`) {
 		t.Fatalf("tmux: %d %s", tmux.Code, tmux.Body.String())
+	}
+	selected := request(handler, http.MethodPost, "/v1/tmux/panes/%2512/select", "", testToken, "")
+	if selected.Code != http.StatusOK || !strings.Contains(selected.Body.String(), `"id":"%12"`) {
+		t.Fatalf("select pane: %d %s", selected.Code, selected.Body.String())
+	}
+	invalidPane := request(handler, http.MethodPost, "/v1/tmux/panes/not-a-pane/select", "", testToken, "")
+	if invalidPane.Code != http.StatusBadRequest {
+		t.Fatalf("invalid pane: %d %s", invalidPane.Code, invalidPane.Body.String())
 	}
 	missing := request(handler, http.MethodGet, "/v1/jobs/not-there", "", testToken, "")
 	if missing.Code != http.StatusNotFound {
