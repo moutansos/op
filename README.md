@@ -615,6 +615,7 @@ conflicts.
 | `GET`  | `/v1/health`                  | Version and project/tmux dependency health. |
 | `GET`  | `/v1/projects`                | Project catalog.                            |
 | `GET`  | `/v1/tmux`                    | Managed tmux session snapshot.              |
+| `POST` | `/v1/tmux/panes/{id}/select`  | Select a managed tmux pane (`200 OK`).      |
 | `GET`  | `/v1/jobs/{id}`               | Clone/worktree job state and result.        |
 | `POST` | `/v1/projects`                | Create a local repository (`201 Created`).  |
 | `POST` | `/v1/projects/clone`          | Queue a clone (`202 Accepted`).             |
