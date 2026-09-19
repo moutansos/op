@@ -189,6 +189,7 @@ func (h *Handler) routes() {
 	h.mux.Handle("GET /v1/projects", h.authenticate(http.HandlerFunc(h.listProjects)))
 	h.mux.Handle("GET /v1/tmux", h.authenticate(http.HandlerFunc(h.getTmux)))
 	h.mux.Handle("POST /v1/tmux/panes/{id}/select", h.authenticate(http.HandlerFunc(h.selectPane)))
+	h.mux.Handle("GET /v1/stats", h.authenticate(http.HandlerFunc(h.getStats)))
 	h.mux.Handle("GET /v1/jobs/{id}", h.authenticate(http.HandlerFunc(h.getJob)))
 	h.mux.Handle("POST /v1/projects", h.authenticate(http.HandlerFunc(h.createProject)))
 	h.mux.Handle("POST /v1/projects/clone", h.authenticate(http.HandlerFunc(h.cloneProject)))
@@ -217,6 +218,7 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("/v1/health", methodNotAllowed(http.MethodGet))
 	h.mux.HandleFunc("/v1/tmux", methodNotAllowed(http.MethodGet))
 	h.mux.HandleFunc("/v1/tmux/panes/{id}/select", methodNotAllowed(http.MethodPost))
+	h.mux.HandleFunc("/v1/stats", methodNotAllowed(http.MethodGet))
 	if h.options.NotifyIngest != nil {
 		h.mux.HandleFunc("/v1/notify", methodNotAllowed(http.MethodPost))
 		h.mux.HandleFunc("/v1/claude-code/hook", methodNotAllowed(http.MethodPost))
@@ -360,6 +362,15 @@ func (h *Handler) selectPane(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) getStats(w http.ResponseWriter, r *http.Request) {
+	snapshot, err := h.service.GetStatsSnapshot(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (h *Handler) getJob(w http.ResponseWriter, r *http.Request) {

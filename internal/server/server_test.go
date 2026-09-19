@@ -29,6 +29,7 @@ type fakeService struct {
 	openProject    func(context.Context, domain.OpenProjectRequest) (domain.OpenProjectResult, error)
 	getTmux        func(context.Context) (domain.TmuxSnapshot, error)
 	selectPane     func(context.Context, domain.SelectPaneRequest) (domain.SelectPaneResult, error)
+	getStats       func(context.Context) (domain.StatsSnapshot, error)
 }
 
 func (f *fakeService) ListProjects(ctx context.Context) ([]domain.Project, error) {
@@ -88,7 +89,10 @@ func (f *fakeService) GetTmuxSnapshot(ctx context.Context) (domain.TmuxSnapshot,
 	return domain.TmuxSnapshot{}, nil
 }
 
-func (f *fakeService) GetStatsSnapshot(context.Context) (domain.StatsSnapshot, error) {
+func (f *fakeService) GetStatsSnapshot(ctx context.Context) (domain.StatsSnapshot, error) {
+	if f.getStats != nil {
+		return f.getStats(ctx)
+	}
 	return domain.StatsSnapshot{}, nil
 }
 
@@ -233,6 +237,9 @@ func TestRoutesDelegateDomainRequests(t *testing.T) {
 			}
 			return domain.SelectPaneResult{Window: domain.TmuxWindow{ID: "@3", Name: "project"}, Pane: domain.TmuxPane{ID: "%12", Active: true}}, nil
 		},
+		getStats: func(context.Context) (domain.StatsSnapshot, error) {
+			return domain.StatsSnapshot{Agents: []domain.PaneAgentState{{PaneID: "%12", AgentName: "opencode2", Activity: domain.AgentActivityAwaitingInput}}}, nil
+		},
 	}
 	handler := newTestHandler(t, service, nil)
 
@@ -259,6 +266,10 @@ func TestRoutesDelegateDomainRequests(t *testing.T) {
 	invalidPane := request(handler, http.MethodPost, "/v1/tmux/panes/not-a-pane/select", "", testToken, "")
 	if invalidPane.Code != http.StatusBadRequest {
 		t.Fatalf("invalid pane: %d %s", invalidPane.Code, invalidPane.Body.String())
+	}
+	stats := request(handler, http.MethodGet, "/v1/stats", "", testToken, "")
+	if stats.Code != http.StatusOK || !strings.Contains(stats.Body.String(), `"activity":"awaiting_input"`) {
+		t.Fatalf("stats: %d %s", stats.Code, stats.Body.String())
 	}
 	missing := request(handler, http.MethodGet, "/v1/jobs/not-there", "", testToken, "")
 	if missing.Code != http.StatusNotFound {
