@@ -104,6 +104,8 @@ jobs:
       - name: Run integration tests on disposable sockets
         env:
           OP_TMUX_INTEGRATION: "1"
+          # Attached clients need terminal capabilities even on a headless runner.
+          TERM: xterm-256color
           TMUX: ""
           TMUX_PANE: ""
         run: go test ./internal/tmux -run '^TestIntegration' -count=1 -v
