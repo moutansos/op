@@ -69,12 +69,21 @@ func (i *Ingest) handleHook(w http.ResponseWriter, r *http.Request, source strin
 	}
 	notification := mapHook(payload)
 	if notification == nil {
+		if observation, ok := hookObservation(Source(source), payload); ok {
+			observe(i.notifier, observation)
+		}
 		i.logger.Info("ingest hook ignored", "source", source)
 		writeIngestOK(w, true)
 		return
 	}
 	i.logger.Info("ingest hook", "source", source, "type", notification.Type, "session", notification.SessionID)
-	_ = i.notifier.Send(r.Context(), *notification)
+	if hookString(payload, "session_id", "sessionId") == "" {
+		// Legacy notifications allow a display-only "unknown" fallback; that
+		// value cannot identify a native session for reconciliation.
+		_ = i.notifier.Send(alreadyObserved(r.Context()), *notification)
+	} else {
+		_ = sendNative(r.Context(), i.notifier, *notification, CoverageHooks)
+	}
 	writeIngestOK(w, false)
 }
 

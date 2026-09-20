@@ -16,6 +16,7 @@ import (
 	"github.com/moutansos/op/internal/domain"
 	"github.com/moutansos/op/internal/notify"
 	"github.com/moutansos/op/internal/server"
+	"github.com/moutansos/op/internal/state"
 	"github.com/moutansos/op/internal/tui"
 )
 
@@ -166,18 +167,35 @@ func (r *runner) runTree(ctx context.Context, args []string) error {
 }
 
 func (r *runner) runDashboardTUI(ctx context.Context, service Service) error {
+	if r.config.Server.Enabled {
+		return r.runServingDashboard(ctx, service)
+	}
+	if r.config.Server.State.ParentURL != "" {
+		return r.runParentDashboard(ctx, service)
+	}
+	return r.runDashboardUI(ctx, service, nil)
+}
+
+func (r *runner) runDashboardUI(ctx context.Context, service Service, tracker *state.Tracker) error {
 	openers := make([]tui.ProjectOpener, 0, len(r.config.ProjectOpeners))
 	for _, opener := range r.config.ProjectOpeners {
 		openers = append(openers, tui.ProjectOpener{ID: opener.ID, Name: opener.Name, Mode: opener.Mode})
 	}
-	return r.options.RunTUI(ctx, service, tui.Options{
+	options := tui.Options{
 		DefaultProfile:         r.config.Tmux.DefaultProfile,
 		ProjectOpeners:         openers,
 		ProjectRefreshInterval: r.config.Stats.TmuxRefreshInterval.Duration,
 		TmuxRefreshInterval:    r.config.Stats.TmuxRefreshInterval.Duration,
 		StatsRefreshInterval:   r.config.Stats.RefreshInterval.Duration,
 		SnapshotCachePath:      r.snapshotCachePath(),
-	})
+	}
+	if tracker != nil && tracker.Connection().EventsURL != "" {
+		options.ParentStatus = func() tui.ParentLink {
+			link := tracker.Connection()
+			return tui.ParentLink{State: string(link.State), Detail: link.Detail}
+		}
+	}
+	return r.options.RunTUI(ctx, service, options)
 }
 
 func (r *runner) runServe(ctx context.Context, args []string) error {
@@ -189,18 +207,77 @@ func (r *runner) runServe(ctx context.Context, args []string) error {
 	if len(positionals) != 0 {
 		return usageError("serve accepts no arguments")
 	}
-	token, err := r.apiToken()
-	if err != nil {
-		return err
-	}
-	if token == "" {
-		return domain.FieldError(domain.ErrorCodeConfig, "cli.serve", "token", "OP_API_TOKEN or a non-empty server token file is required")
-	}
 	service, err := r.getService(ctx)
 	if err != nil {
 		return err
 	}
 	serveCtx, cancel := r.options.Signals(ctx)
+	defer cancel()
+	return r.serveRuntime(serveCtx, service, nil)
+}
+
+func (r *runner) newStateTracker(service domain.Service) (*state.Tracker, *notify.Service, error) {
+	instanceID, err := stateInstanceID(r.config.Server.State.InstanceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	stateConfig := r.config.Server.State
+	parentToken := strings.TrimSpace(r.options.LookupEnv("OP_PARENT_TOKEN"))
+	if parentToken == "" {
+		parentToken = stateConfig.ParentToken
+	}
+	tracker, err := state.New(service, state.Options{
+		InstanceID: instanceID, ParentURL: stateConfig.ParentURL, ParentEventsURL: stateConfig.ParentEventsURL, ParentToken: parentToken,
+		RefreshInterval:   stateConfig.RefreshInterval.Duration,
+		HeartbeatInterval: stateConfig.HeartbeatInterval.Duration,
+		StaleAfter:        stateConfig.StaleAfter.Duration,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if !r.config.Notifications.Enabled {
+		return tracker, nil, nil
+	}
+	logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
+	notifyService, err := notify.New(notifyOptions(r.config.Notifications, logger))
+	if err != nil {
+		return nil, nil, err
+	}
+	notifyService.Notifier.SetObserver(tracker.Observe)
+	return tracker, notifyService, nil
+}
+
+func (r *runner) runParentWork(ctx context.Context, tracker *state.Tracker, notifyService *notify.Service) {
+	if notifyService != nil {
+		logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
+		if r.config.Notifications.OpenCode.BaseURL != "" {
+			go func() {
+				if err := notifyService.WatchOpenCode(ctx); err != nil && ctx.Err() == nil {
+					logger.Error("opencode notification watcher stopped", "err", err)
+				}
+			}()
+		}
+		if r.config.Notifications.OpenCode2.Enabled {
+			go func() {
+				if err := notifyService.WatchOpenCode2(ctx); err != nil && ctx.Err() == nil {
+					logger.Error("opencode2 notification watcher stopped", "err", err)
+				}
+			}()
+		}
+	}
+	_ = tracker.Run(ctx)
+}
+
+// serveRuntime is shared by the dashboard and the standalone serve command.
+func (r *runner) serveRuntime(ctx context.Context, service domain.Service, ready func(*state.Tracker)) error {
+	token, err := r.apiToken()
+	if err != nil {
+		return err
+	}
+	if token == "" {
+		return domain.FieldError(domain.ErrorCodeConfig, "cli.serve", "token", "OP_API_TOKEN, server.token, or a non-empty server token file is required")
+	}
+	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	options := server.DefaultOptions()
 	options.ListenAddress = r.config.Server.Listen
@@ -208,31 +285,31 @@ func (r *runner) runServe(ctx context.Context, args []string) error {
 	options.TLSCertFile = r.config.Server.TLSCertFile
 	options.TLSKeyFile = r.config.Server.TLSKeyFile
 	options.Version = r.options.Version.Version
-	if r.config.Notifications.Enabled {
-		logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
-		options.Logger = logger
-		notifyService, err := notify.New(notifyOptions(r.config.Notifications, logger))
-		if err != nil {
-			return err
-		}
-		if r.config.Notifications.Ingest.Enabled {
-			options.NotifyIngest = notifyService.Ingest
-		}
-		if r.config.Notifications.OpenCode.BaseURL != "" {
-			go func() {
-				if err := notifyService.WatchOpenCode(serveCtx); err != nil && serveCtx.Err() == nil {
-					logger.Error("opencode notification watcher stopped", "err", err)
-				}
-			}()
-		}
-		if r.config.Notifications.OpenCode2.Enabled {
-			go func() {
-				if err := notifyService.WatchOpenCode2(serveCtx); err != nil && serveCtx.Err() == nil {
-					logger.Error("opencode2 notification watcher stopped", "err", err)
-				}
-			}()
+	tracker, notifyService, err := r.newStateTracker(service)
+	if err != nil {
+		return err
+	}
+	options.State = tracker
+	stateDone := make(chan struct{})
+	logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
+	options.Logger = logger
+	if notifyService != nil && r.config.Notifications.Ingest.Enabled {
+		options.NotifyIngest = notifyService.Ingest
+	}
+	started := false
+	options.OnListening = func() {
+		started = true
+		go func() { defer close(stateDone); r.runParentWork(serveCtx, tracker, notifyService) }()
+		if ready != nil {
+			ready(tracker)
 		}
 	}
+	defer func() {
+		cancel()
+		if started {
+			<-stateDone
+		}
+	}()
 	return r.options.RunServer(serveCtx, service, options)
 }
 
@@ -353,6 +430,9 @@ func notifyInstallNextSteps(kind notify.InstallKind, listen string) string {
 
 func (r *runner) apiToken() (string, error) {
 	if token := strings.TrimSpace(r.options.LookupEnv("OP_API_TOKEN")); token != "" {
+		return token, nil
+	}
+	if token := strings.TrimSpace(r.config.Server.Token); token != "" {
 		return token, nil
 	}
 	if r.config.Server.TokenFile == "" {

@@ -87,10 +87,19 @@
   },
   "server": {
     "enabled": false,
+    "token": "",
     "listen": "127.0.0.1:8787",
     "tokenFile": "~/.config/op/server-token",
     "tlsCertFile": "",
-    "tlsKeyFile": ""
+    "tlsKeyFile": "",
+    "state": {
+      "instanceId": "",
+      "parentUrl": "",
+      "parentEventsUrl": "",
+      "refreshInterval": "2s",
+      "heartbeatInterval": "10s",
+      "staleAfter": "1m"
+    }
   },
   "actions": {
     "guiEditors": false

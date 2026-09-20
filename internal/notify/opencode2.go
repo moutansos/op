@@ -273,6 +273,16 @@ func translateV2Event(data []byte) (string, json.RawMessage, bool) {
 		directory = event.Location.Directory
 	}
 	switch event.Type {
+	case "form.replied", "form.cancelled":
+		kind := "question.replied"
+		if event.Type == "form.cancelled" {
+			kind = "question.rejected"
+		}
+		payload, err := json.Marshal(map[string]any{"type": kind, "properties": event.Data})
+		return directory, payload, err == nil
+	case "permission.replied", "permission.rejected", "session.deleted":
+		payload, err := json.Marshal(map[string]any{"type": event.Type, "properties": event.Data})
+		return directory, payload, err == nil
 	case "session.execution.started", "session.step.started":
 		sessionID := v2SessionID(event.Data)
 		if sessionID == "" {

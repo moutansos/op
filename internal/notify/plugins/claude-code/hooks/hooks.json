@@ -1,6 +1,10 @@
 {
   "description": "Forward Claude Code events to oc-notifier. The plugin only relays hook payloads; oc-notifier owns provider routing and formatting.",
   "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "bash", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/forward.sh"], "async": true, "timeout": 15}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "bash", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/forward.sh"], "async": true, "timeout": 15}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "bash", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/forward.sh"], "async": true, "timeout": 15}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "bash", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/forward.sh"], "async": true, "timeout": 15}]}],
     "Notification": [
       {
         "matcher": "agent_needs_input|agent_completed|elicitation_dialog",

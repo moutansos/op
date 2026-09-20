@@ -309,9 +309,11 @@ outside that root.
 On WSL, `pwsh.exe` and `powershell.exe` are launched through Windows interop and use
 `-NoExit -Command` wrapping. The Linux dashboard cannot run inside a Windows `.exe`
 shell, so that pane is wrapped with `sh` instead.
-`actions.guiEditors` controls whether the `code .` action is offered. `server.enabled` records
-configuration intent but does not start a background process; invoke `op serve` or install the
-systemd user unit.
+`actions.guiEditors` controls whether the `code .` action is offered. Set `server.enabled`
+to true to host the authenticated API, state sampler, and parent forwarding inside the
+dashboard process. Set `server.token` in `config.json`, or use `OP_API_TOKEN` (highest
+precedence) or `server.tokenFile` (fallback). For independent hosting, invoke `op serve`
+or install the systemd user unit; standalone serving does not depend on `server.enabled`.
 
 Unknown JSON fields currently produce warnings and are ignored. Canonical fields take precedence
 over legacy aliases.
@@ -563,7 +565,9 @@ openssl rand -hex 32 > "$HOME/.config/op/server-token"
 op serve
 ```
 
-`OP_API_TOKEN` takes precedence over `server.tokenFile`. A non-empty token is required even on
+`OP_API_TOKEN` takes precedence over `server.token` in `config.json`, followed by
+`server.tokenFile`. Set `server.enabled: true` to host the same server in the dashboard;
+`op serve` hosts independently. A non-empty token is required even on
 loopback, and every `/v1/...` route requires `Authorization: Bearer <token>`. OpenAPI and Swagger
 documentation routes are public but do not perform operations.
 
@@ -594,7 +598,7 @@ op remote projects
 ```
 
 Remote connection precedence is `--base-url`, then `OP_REMOTE_URL`, then the configured listener.
-Token precedence is `--token`, then `OP_API_TOKEN`, then `server.tokenFile`. The default request
+Token precedence is `--token`, then `OP_API_TOKEN`, then `server.token`, then `server.tokenFile`. The default request
 timeout is 30 seconds and can be changed with `--timeout DURATION`. The Windows proxy bridges
 `OP_REMOTE_URL` and `OP_API_TOKEN` into WSL through an augmented `WSLENV`; it does not run a separate
 native remote client.
@@ -673,7 +677,7 @@ run the user service after logout, an administrator or the user (where permitted
 - **Server rejects non-loopback configuration:** configure both TLS files and a token, or return
   `server.listen` to `127.0.0.1:8787` and use SSH forwarding.
 - **Remote `401 Unauthorized`:** verify exactly one Bearer token is being sent and that the client
-  token matches `OP_API_TOKEN` or the server token file without extra whitespace.
+  token matches `OP_API_TOKEN`, `server.token`, or the server token file without extra whitespace.
 - **Swagger page is blank offline:** use `/openapi.json`; Swagger UI assets are fetched from
   `unpkg.com`.
 - **Statistics initially show `-` CPU:** process CPU is delta-based and becomes available after the
@@ -729,3 +733,8 @@ dist/op version
 ```
 
 Without release ldflags, `op version` reports `dev`, `unknown`, and `unknown`.
+## Parent orchestrators
+
+`op serve` exposes authenticated, reconcilable project and agent state and can
+push full-state events to a parent such as muxplane. See
+[the synchronization protocol and configuration](docs/orchestrator-state.md).

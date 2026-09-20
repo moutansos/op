@@ -160,6 +160,7 @@ func (r *testRuntime) options() Options {
 	cfg.RootDirectory = "/config"
 	cfg.SourcePath = "/config/config.json"
 	cfg.Server.TokenFile = "/token"
+	cfg.Server.State.InstanceID = "test-instance"
 	cfg.CustomCommands = r.customCommands
 	if r.projectOpeners != nil {
 		cfg.ProjectOpeners = r.projectOpeners
@@ -832,6 +833,7 @@ func TestServeWiresNotificationIngestWhenEnabled(t *testing.T) {
 	options.LoadConfig = func(string) (config.LoadResult, error) {
 		cfg := config.Defaults()
 		cfg.RepoDirectory = "/repos"
+		cfg.Server.State.InstanceID = "test-instance"
 		cfg.Notifications.Enabled = true
 		cfg.Notifications.Ingest.Enabled = true
 		return config.LoadResult{Config: cfg}, nil

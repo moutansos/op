@@ -33,6 +33,14 @@ type Options struct {
 	OperationTimeout  time.Duration
 	SnapshotCachePath string
 	SnapshotMaxAge    time.Duration
+	// ParentStatus, when set, is polled for the muxplane connection indicator.
+	ParentStatus func() ParentLink
+}
+
+// ParentLink is the outbound muxplane connection shown on the dashboard.
+type ParentLink struct {
+	State  string
+	Detail string
 }
 
 func (o Options) withDefaults() Options {

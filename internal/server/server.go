@@ -22,6 +22,7 @@ import (
 
 	"github.com/moutansos/op/internal/domain"
 	"github.com/moutansos/op/internal/notify"
+	"github.com/moutansos/op/internal/state"
 )
 
 const (
@@ -39,6 +40,8 @@ const (
 
 // Options configures both the HTTP handler and the listening server.
 type Options struct {
+	// OnListening starts application-owned background work after binding succeeds.
+	OnListening        func()
 	ListenAddress      string
 	Token              string
 	TLSCertFile        string
@@ -56,6 +59,7 @@ type Options struct {
 	IdleTimeout        time.Duration
 	Logger             *slog.Logger
 	NotifyIngest       *notify.Ingest
+	State              *state.Tracker
 }
 
 // DefaultOptions returns secure defaults suitable for local CLI composition.
@@ -190,6 +194,7 @@ func (h *Handler) routes() {
 	h.mux.Handle("GET /v1/tmux", h.authenticate(http.HandlerFunc(h.getTmux)))
 	h.mux.Handle("POST /v1/tmux/panes/{id}/select", h.authenticate(http.HandlerFunc(h.selectPane)))
 	h.mux.Handle("GET /v1/stats", h.authenticate(http.HandlerFunc(h.getStats)))
+	h.mux.Handle("GET /v1/state", h.authenticate(http.HandlerFunc(h.getState)))
 	h.mux.Handle("GET /v1/jobs/{id}", h.authenticate(http.HandlerFunc(h.getJob)))
 	h.mux.Handle("POST /v1/projects", h.authenticate(http.HandlerFunc(h.createProject)))
 	h.mux.Handle("POST /v1/projects/clone", h.authenticate(http.HandlerFunc(h.cloneProject)))
@@ -219,6 +224,7 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("/v1/tmux", methodNotAllowed(http.MethodGet))
 	h.mux.HandleFunc("/v1/tmux/panes/{id}/select", methodNotAllowed(http.MethodPost))
 	h.mux.HandleFunc("/v1/stats", methodNotAllowed(http.MethodGet))
+	h.mux.HandleFunc("/v1/state", methodNotAllowed(http.MethodGet))
 	if h.options.NotifyIngest != nil {
 		h.mux.HandleFunc("/v1/notify", methodNotAllowed(http.MethodPost))
 		h.mux.HandleFunc("/v1/claude-code/hook", methodNotAllowed(http.MethodPost))
@@ -371,6 +377,14 @@ func (h *Handler) getStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, snapshot)
+}
+
+func (h *Handler) getState(w http.ResponseWriter, r *http.Request) {
+	if h.options.State == nil {
+		writeStatusError(w, http.StatusServiceUnavailable, domain.NewError(domain.ErrorCodeDependency, "server.state", "state sampler is not configured", nil))
+		return
+	}
+	writeJSON(w, http.StatusOK, h.options.State.Snapshot())
 }
 
 func (h *Handler) getJob(w http.ResponseWriter, r *http.Request) {
@@ -753,23 +767,28 @@ func (s *Server) HTTPServer() *http.Server { return s.http }
 
 // ListenAndServe starts HTTP or HTTPS according to Options.
 func (s *Server) ListenAndServe() error {
-	if s.options.TLSCertFile != "" {
-		return s.http.ListenAndServeTLS(s.options.TLSCertFile, s.options.TLSKeyFile)
+	listener, err := net.Listen("tcp", s.options.ListenAddress)
+	if err != nil {
+		return err
 	}
-	return s.http.ListenAndServe()
+	defer listener.Close()
+	return s.Serve(listener)
 }
 
 // Serve serves an existing listener, applying TLS when configured.
 func (s *Server) Serve(listener net.Listener) error {
-	if s.options.TLSCertFile == "" {
-		return s.http.Serve(listener)
+	if s.options.TLSCertFile != "" {
+		certificate, err := tls.LoadX509KeyPair(s.options.TLSCertFile, s.options.TLSKeyFile)
+		if err != nil {
+			return err
+		}
+		configuration := &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+		listener = tls.NewListener(listener, configuration)
 	}
-	certificate, err := tls.LoadX509KeyPair(s.options.TLSCertFile, s.options.TLSKeyFile)
-	if err != nil {
-		return err
+	if s.options.OnListening != nil {
+		s.options.OnListening()
 	}
-	configuration := &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
-	return s.http.Serve(tls.NewListener(listener, configuration))
+	return s.http.Serve(listener)
 }
 
 // Shutdown stops HTTP traffic and cancels asynchronous jobs.

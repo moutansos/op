@@ -63,6 +63,7 @@ type worktreeFinishedMsg struct {
 type projectTickMsg struct{}
 type tmuxTickMsg struct{}
 type statsTickMsg struct{}
+type parentTickMsg struct{}
 type snapshotPublishedMsg struct{}
 
 func (m Model) loadProjectsCmd() tea.Cmd {
@@ -228,6 +229,13 @@ func (m Model) tmuxTickCmd() tea.Cmd {
 
 func (m Model) statsTickCmd() tea.Cmd {
 	return m.tickCmd(m.options.StatsRefreshInterval, statsTickMsg{})
+}
+
+func (m Model) parentTickCmd() tea.Cmd {
+	if m.options.ParentStatus == nil {
+		return nil
+	}
+	return m.tickCmd(time.Second, parentTickMsg{})
 }
 
 func (m Model) tickCmd(after time.Duration, msg tea.Msg) tea.Cmd {

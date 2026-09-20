@@ -16,6 +16,7 @@ var (
 	dirtyColor  = lipgloss.AdaptiveColor{Light: "#C96A00", Dark: "#FFB24A"}
 	dimColor    = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#8A8A8A"}
 	errorColor  = lipgloss.AdaptiveColor{Light: "#A51D2D", Dark: "#FF6B7A"}
+	warnColor   = lipgloss.AdaptiveColor{Light: "#C96A00", Dark: "#FFB24A"}
 
 	titleStyle         = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
 	branchStyle        = lipgloss.NewStyle().Foreground(branchColor)
@@ -181,7 +182,34 @@ func (m Model) statusPanel(width, height int) string {
 	if m.section == tmuxSection {
 		help = dimStyle.Render("enter select pane   j/k move   click pane   tab sections   r refresh   q quit")
 	}
-	return renderPanel("Actions / Status", status+"\n"+help, width, height, false, nil)
+	return renderPanel(m.statusPanelTitle(), status+"\n"+help, width, height, false, nil)
+}
+
+func (m Model) statusPanelTitle() string {
+	if m.parent.State == "" {
+		return "Actions / Status"
+	}
+	return "Actions / Status   " + m.parentIndicator()
+}
+
+func (m Model) parentIndicator() string {
+	label := "muxplane " + m.parent.State
+	style := dimStyle
+	switch m.parent.State {
+	case "connected":
+		style = projectCleanStyle
+		label = "● muxplane connected"
+	case "connecting", "reconnecting":
+		style = lipgloss.NewStyle().Foreground(warnColor)
+		label = "● muxplane " + m.parent.State
+	case "error":
+		style = errorStyle
+		label = "● muxplane error"
+	}
+	if m.parent.Detail != "" && m.parent.State != "connected" {
+		label += ": " + m.parent.Detail
+	}
+	return style.Render(label)
 }
 
 func (m Model) tmuxBodyOrigin() (x, y, width, height int, ok bool) {
