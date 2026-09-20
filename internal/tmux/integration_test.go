@@ -1219,7 +1219,6 @@ func integrationPaneID(t *testing.T, raw rawTmux, target string) string {
 	return strings.TrimSpace(paneID)
 }
 
-// attachedClientScript skips unless this environment can host an attached tmux client.
 func attachedClientScript(t *testing.T) string {
 	t.Helper()
 	script, err := exec.LookPath("script")
@@ -1236,7 +1235,6 @@ func startAttachedClient(t *testing.T, script, executable, socket, session strin
 	t.Helper()
 	client := exec.Command(script, "-q", "-c", shellQuote(executable)+" -S "+shellQuote(socket)+" attach-session -t "+shellQuote(session), "/dev/null")
 	client.Env = append(os.Environ(), "TMUX=", "TMUX_PANE=")
-	// script relays attach failures through the PTY transcript on stdout, not stderr.
 	transcript := &boundedBuffer{}
 	client.Stdout = transcript
 	client.Stderr = transcript
@@ -1259,7 +1257,6 @@ func startAttachedClient(t *testing.T, script, executable, socket, session strin
 	})
 }
 
-// boundedBuffer keeps the head of a PTY transcript so failures can report why an attach died.
 type boundedBuffer struct {
 	mu   sync.Mutex
 	data []byte

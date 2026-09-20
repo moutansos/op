@@ -143,7 +143,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.section = projectsSection
-		// Both list setters below rewind the cursor, so restore the highlighted row.
 		selectedID := m.selectedProjectID()
 		if m.projects.FilterState() == list.Unfiltered {
 			m.projects.SetFilterText("")
@@ -341,8 +340,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if key.String() == "enter" {
-			// SetFilterText applies pending matches but rewinds the cursor, so restore
-			// the highlighted row. A row the committed filter drops falls back to the top match.
 			selectedID := m.selectedProjectID()
 			m.projectFilterGeneration++
 			m.projects.SetFilterText(m.projects.FilterValue())
