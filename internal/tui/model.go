@@ -143,10 +143,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.section = projectsSection
+		selectedID := m.selectedProjectID()
 		if m.projects.FilterState() == list.Unfiltered {
 			m.projects.SetFilterText("")
 		}
 		m.projects.SetFilterState(list.Filtering)
+		m.selectProjectByID(selectedID)
 		return m, textinput.Blink
 
 	case projectsLoadedMsg:
@@ -338,8 +340,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if key.String() == "enter" {
+			selectedID := m.selectedProjectID()
 			m.projectFilterGeneration++
 			m.projects.SetFilterText(m.projects.FilterValue())
+			m.selectProjectByID(selectedID)
 			return m.startOpen()
 		}
 		return m.updateProjects(key)
@@ -684,16 +688,26 @@ func (m *Model) finishProjectSelection(projectID string, required bool) {
 		m.projects.ResetSelected()
 		return
 	}
+	if m.selectProjectByID(projectID) {
+		m.projectSelectionUnavailable = false
+		return
+	}
+	m.projects.ResetSelected()
+	m.projectSelectionUnavailable = true
+}
+
+func (m *Model) selectProjectByID(projectID string) bool {
+	if projectID == "" {
+		return false
+	}
 	for index, item := range m.projects.VisibleItems() {
 		project, ok := item.(projectItem)
 		if ok && project.project.ID == projectID {
 			m.projects.Select(index)
-			m.projectSelectionUnavailable = false
-			return
+			return true
 		}
 	}
-	m.projects.ResetSelected()
-	m.projectSelectionUnavailable = true
+	return false
 }
 
 func (m Model) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {

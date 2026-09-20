@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -687,10 +688,7 @@ func TestIntegrationAttachOrSwitchTargetsInvokingClient(t *testing.T) {
 	if err != nil {
 		t.Skip("tmux is not installed")
 	}
-	script, err := exec.LookPath("script")
-	if err != nil {
-		t.Skip("script is required to allocate an attached tmux client PTY")
-	}
+	script := attachedClientScript(t)
 
 	root := t.TempDir()
 	raw := rawTmux{executable: executable, socket: integrationSocket(t, executable)}
@@ -781,10 +779,7 @@ func TestIntegrationPreparedOutsideAttachAllowsConcurrentMutation(t *testing.T) 
 	if err != nil {
 		t.Skip("tmux is not installed")
 	}
-	script, err := exec.LookPath("script")
-	if err != nil {
-		t.Skip("script is required to allocate an attached tmux client PTY")
-	}
+	script := attachedClientScript(t)
 	manager, raw, dashboard := newDashboardIntegration(t)
 	root := manager.config.StartDirectory
 	if _, err := manager.client.CreateWindow(context.Background(), manager.config.Session, "active-before-attach", root, "sleep 300"); err != nil {
@@ -903,10 +898,7 @@ func TestIntegrationForeignServerCallerCannotTargetManagedServer(t *testing.T) {
 	if err != nil {
 		t.Skip("tmux is not installed")
 	}
-	script, err := exec.LookPath("script")
-	if err != nil {
-		t.Skip("script is required to allocate attached tmux client PTYs")
-	}
+	script := attachedClientScript(t)
 
 	root := t.TempDir()
 	managed := rawTmux{executable: executable, socket: integrationSocket(t, executable)}
@@ -1227,12 +1219,25 @@ func integrationPaneID(t *testing.T, raw rawTmux, target string) string {
 	return strings.TrimSpace(paneID)
 }
 
+func attachedClientScript(t *testing.T) string {
+	t.Helper()
+	script, err := exec.LookPath("script")
+	if err != nil {
+		t.Skip("script is required to allocate attached tmux client PTYs")
+	}
+	if term := os.Getenv("TERM"); term == "" || term == "dumb" {
+		t.Skip("attached tmux clients require a TERM tmux can drive")
+	}
+	return script
+}
+
 func startAttachedClient(t *testing.T, script, executable, socket, session string) {
 	t.Helper()
 	client := exec.Command(script, "-q", "-c", shellQuote(executable)+" -S "+shellQuote(socket)+" attach-session -t "+shellQuote(session), "/dev/null")
 	client.Env = append(os.Environ(), "TMUX=", "TMUX_PANE=")
-	client.Stdout = io.Discard
-	client.Stderr = io.Discard
+	transcript := &boundedBuffer{}
+	client.Stdout = transcript
+	client.Stderr = transcript
 	clientInput, err := client.StdinPipe()
 	if err != nil {
 		t.Fatalf("open attached tmux client input: %v", err)
@@ -1246,7 +1251,35 @@ func startAttachedClient(t *testing.T, script, executable, socket, session strin
 			_ = client.Process.Kill()
 		}
 		_ = client.Wait()
+		if line := transcript.firstLine(); t.Failed() && line != "" {
+			t.Logf("attached tmux client %q: %s", session, line)
+		}
 	})
+}
+
+type boundedBuffer struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if room := 512 - len(b.data); room > 0 {
+		b.data = append(b.data, p[:min(room, len(p))]...)
+	}
+	return len(p), nil
+}
+
+func (b *boundedBuffer) firstLine() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, line := range strings.Split(string(b.data), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func waitForClientsAtPanes(t *testing.T, raw rawTmux, want map[string]string) map[string]integrationClientState {
