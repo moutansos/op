@@ -351,10 +351,65 @@ func TestEnterWhileFilteringOpensTheSelectedProject(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("enter while filtering did not schedule an open")
 	}
+	model = deliverTestCmd(model, cmd)
+	if service.openReq.ProjectID != "three" {
+		t.Fatalf("opened project ID = %q, want three", service.openReq.ProjectID)
+	}
+}
+
+func TestEnterWithoutFilterTextOpensTheSelectedProject(t *testing.T) {
+	service := &fakeService{}
+	model := loadProjectsForTest(testModel(service),
+		domain.Project{ID: "one", Name: "alpha", Path: "/repos/alpha"},
+		domain.Project{ID: "two", Name: "beta", Path: "/repos/beta"},
+		domain.Project{ID: "three", Name: "gamma", Path: "/repos/gamma"},
+	)
+
+	model = updateTestModel(model, tea.FocusMsg{})
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyCtrlN})
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if got := model.selectedProjectID(); got != "three" {
+		t.Fatalf("selected project before enter = %q, want three", got)
+	}
+
+	model, cmd := updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter did not schedule an open")
+	}
 	deliverTestCmd(model, cmd)
 	if service.openReq.ProjectID != "three" {
 		t.Fatalf("opened project ID = %q, want three", service.openReq.ProjectID)
 	}
+}
+
+func TestRefocusKeepsTheSelectedProject(t *testing.T) {
+	projects := []domain.Project{
+		{ID: "one", Name: "alpha-api", Path: "/repos/alpha-api"},
+		{ID: "two", Name: "alpha-web", Path: "/repos/alpha-web"},
+		{ID: "three", Name: "alpha-cli", Path: "/repos/alpha-cli"},
+	}
+
+	t.Run("unfiltered", func(t *testing.T) {
+		model := loadProjectsForTest(testModel(&fakeService{}), projects...)
+		model = updateTestModel(model, tea.FocusMsg{})
+		selectProjectForTest(t, &model, "three")
+
+		model = updateTestModel(model, tea.FocusMsg{})
+		if got := model.selectedProjectID(); got != "three" {
+			t.Fatalf("selected project after refocus = %q, want three", got)
+		}
+	})
+
+	t.Run("filter applied", func(t *testing.T) {
+		model := loadProjectsForTest(testModel(&fakeService{}), projects...)
+		model.projects.SetFilterText("alpha")
+		selectProjectForTest(t, &model, "three")
+
+		model = updateTestModel(model, tea.FocusMsg{})
+		if got := model.selectedProjectID(); got != "three" {
+			t.Fatalf("selected project after refocus = %q, want three", got)
+		}
+	})
 }
 
 func TestSelectedProjectNameDoesNotWrapInsidePanel(t *testing.T) {
