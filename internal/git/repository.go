@@ -8,10 +8,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 	"unicode"
 
 	"github.com/moutansos/op/internal/domain"
 )
+
+// statusArgs inspect a repository without taking index.lock. Plain git status
+// opportunistically rewrites the index under that lock, so polling it from the
+// dashboard competes with, and can strand locks in front of, the user's own git.
+var statusArgs = []string{"--no-optional-locks", "status", "--porcelain=v2", "--branch"}
 
 // Command is the complete, shell-free description of a git invocation.
 type Command struct {
@@ -30,6 +37,12 @@ type execCommandRunner struct{}
 func (execCommandRunner) Run(ctx context.Context, command Command) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, command.Name, command.Args...)
 	cmd.Dir = command.Directory
+	// The default SIGKILL gives git no chance to remove its lock files. SIGTERM
+	// lets it clean up, and WaitDelay still forces a stop if it does not exit.
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = 2 * time.Second
 	return cmd.CombinedOutput()
 }
 
@@ -182,7 +195,7 @@ func (r *Repository) State(ctx context.Context, path string) (State, error) {
 	output, err := r.runner.Run(ctx, Command{
 		Directory: path,
 		Name:      "git",
-		Args:      []string{"status", "--porcelain=v2", "--branch"},
+		Args:      statusArgs,
 	})
 	if err != nil {
 		if isNotRepository(output, err) {
@@ -216,7 +229,7 @@ func (r *Repository) Pull(ctx context.Context, path string) error {
 	output, err := r.runner.Run(ctx, Command{
 		Directory: path,
 		Name:      "git",
-		Args:      []string{"status", "--porcelain=v2", "--branch"},
+		Args:      statusArgs,
 	})
 	if err != nil {
 		if isNotRepository(output, err) {

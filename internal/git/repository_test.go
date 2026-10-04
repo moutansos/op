@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moutansos/op/internal/domain"
 	gitrepo "github.com/moutansos/op/internal/git"
@@ -254,9 +255,35 @@ func TestStateUsesPorcelainForNormalAndLinkedWorktrees(t *testing.T) {
 			assertCommands(t, runner.commands, []gitrepo.Command{{
 				Directory: path,
 				Name:      "git",
-				Args:      []string{"status", "--porcelain=v2", "--branch"},
+				Args:      []string{"--no-optional-locks", "status", "--porcelain=v2", "--branch"},
 			}})
 		})
+	}
+}
+
+func TestStateDoesNotRewriteIndex(t *testing.T) {
+	path := initializedRepository(t)
+	index := filepath.Join(path, ".git", "index")
+	before, err := os.Stat(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A newer worktree mtime makes the cached stat data stale, which is what
+	// prompts plain git status to take index.lock and rewrite the index.
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(path, "README.md"), future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := gitrepo.NewRepository().State(context.Background(), path); err != nil {
+		t.Fatalf("State() error = %v", err)
+	}
+	after, err := os.Stat(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("State() replaced .git/index; it must not take index.lock")
 	}
 }
 
@@ -287,7 +314,7 @@ func TestPullOnlyRunsForCleanBranchWithUpstream(t *testing.T) {
 		t.Fatalf("Pull() error = %v", err)
 	}
 	assertCommands(t, runner.commands, []gitrepo.Command{
-		{Directory: path, Name: "git", Args: []string{"status", "--porcelain=v2", "--branch"}},
+		{Directory: path, Name: "git", Args: []string{"--no-optional-locks", "status", "--porcelain=v2", "--branch"}},
 		{Directory: path, Name: "git", Args: []string{"pull", "--ff-only"}},
 	})
 }
@@ -309,7 +336,7 @@ func TestPullSkipsProjectsWithoutPullTarget(t *testing.T) {
 				t.Fatalf("Pull() error = %v", err)
 			}
 			assertCommands(t, runner.commands, []gitrepo.Command{{
-				Directory: path, Name: "git", Args: []string{"status", "--porcelain=v2", "--branch"},
+				Directory: path, Name: "git", Args: []string{"--no-optional-locks", "status", "--porcelain=v2", "--branch"},
 			}})
 		})
 	}
@@ -369,7 +396,7 @@ func TestPullRejectsDirtyWorktreeWithoutPulling(t *testing.T) {
 	if !domain.IsCode(err, domain.ErrorCodeConflict) {
 		t.Fatalf("Pull() error = %v, want conflict", err)
 	}
-	if len(runner.commands) != 1 || !reflect.DeepEqual(runner.commands[0].Args, []string{"status", "--porcelain=v2", "--branch"}) {
+	if len(runner.commands) != 1 || !reflect.DeepEqual(runner.commands[0].Args, []string{"--no-optional-locks", "status", "--porcelain=v2", "--branch"}) {
 		t.Fatalf("dirty Pull() commands = %#v", runner.commands)
 	}
 }
