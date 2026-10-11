@@ -21,7 +21,8 @@ import (
 )
 
 // chooseAnotherProjectID is a selector-only action. It is not a project action ID:
-// choosing it reopens the project catalog instead of calling RunProjectAction.
+// choosing it opens the project catalog and then that project's action menu
+// instead of calling RunProjectAction.
 const chooseAnotherProjectID = "choose-another-project"
 
 func (r *runner) runLocal(ctx context.Context, args []string) error {
@@ -63,7 +64,7 @@ func (r *runner) runDefault(ctx context.Context) error {
 			return err
 		}
 		if found {
-			return r.chooseProjectAction(ctx, service, project)
+			return r.chooseProjectAction(ctx, service, project, true)
 		}
 	}
 	if !r.globals.noTarget {
@@ -80,16 +81,9 @@ func (r *runner) runDefault(ctx context.Context) error {
 }
 
 func (r *runner) chooseProjectToOpen(ctx context.Context, service Service) error {
-	projects, err := service.ListProjects(ctx)
-	if err != nil {
+	project, err := r.selectProject(ctx, service, "open project")
+	if err != nil || project == nil {
 		return err
-	}
-	project, err := r.options.SelectProject(ctx, "open project", projects, r.options.Stdin, r.options.Stdout)
-	if err != nil {
-		return domain.NewError(domain.CodeOf(err), "cli.project", "select project", err)
-	}
-	if project == nil {
-		return nil
 	}
 	result, err := service.OpenProject(ctx, domain.OpenProjectRequest{ProjectID: project.ID, DeferSelection: true})
 	if err != nil {
@@ -102,7 +96,27 @@ func (r *runner) chooseProjectToOpen(ctx context.Context, service Service) error
 	return service.AttachOrSwitchTo(ctx, result.Window.ID)
 }
 
-func (r *runner) chooseProjectAction(ctx context.Context, service Service, project domain.Project) error {
+func (r *runner) selectProject(ctx context.Context, service Service, title string) (*domain.Project, error) {
+	projects, err := service.ListProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	project, err := r.options.SelectProject(ctx, title, projects, r.options.Stdin, r.options.Stdout)
+	if err != nil {
+		return nil, domain.NewError(domain.CodeOf(err), "cli.project", "select project", err)
+	}
+	return project, nil
+}
+
+func (r *runner) chooseAnotherProject(ctx context.Context, service Service) error {
+	project, err := r.selectProject(ctx, service, "choose project")
+	if err != nil || project == nil {
+		return err
+	}
+	return r.chooseProjectAction(ctx, service, *project, false)
+}
+
+func (r *runner) chooseProjectAction(ctx context.Context, service Service, project domain.Project, allowSwitch bool) error {
 	actions := []tui.Action{
 		{Name: "nvim", ID: actionpolicy.NvimID},
 		{Name: "cd-here", ID: actionpolicy.ShellID},
@@ -110,7 +124,9 @@ func (r *runner) chooseProjectAction(ctx context.Context, service Service, proje
 	if r.config.Actions.GUIEditors {
 		actions = append(actions, tui.Action{Name: "vs-code", ID: actionpolicy.CodeID})
 	}
-	actions = append(actions, tui.Action{Name: "choose-another-project", ID: chooseAnotherProjectID})
+	if allowSwitch {
+		actions = append(actions, tui.Action{Name: "choose-another-project", ID: chooseAnotherProjectID})
+	}
 	for index, command := range r.config.CustomCommands {
 		if err := actionpolicy.ValidateCustomName(command.Name); err != nil {
 			return domain.FieldError(domain.ErrorCodeConfig, "cli.action", fmt.Sprintf("customCommands[%d].name", index), err.Error())
@@ -125,7 +141,7 @@ func (r *runner) chooseProjectAction(ctx context.Context, service Service, proje
 		return nil
 	}
 	if chosen.ID == chooseAnotherProjectID {
-		return r.chooseProjectToOpen(ctx, service)
+		return r.chooseAnotherProject(ctx, service)
 	}
 	result, err := service.RunProjectAction(ctx, domain.RunProjectActionRequest{ProjectID: project.ID, Action: chosen.ID})
 	if err != nil {
