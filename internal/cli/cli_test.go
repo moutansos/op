@@ -130,10 +130,13 @@ type testRuntime struct {
 	projectOpeners          []config.ProjectOpener
 	guiEditors              bool
 	selectedAction          string
+	actionSelections        []string
 	selectedProject         string
 	selectorCalls           int
 	selectorTitle           string
+	selectorTitles          []string
 	selectorActions         []tui.Action
+	selectorActionSets      [][]tui.Action
 	selectorStreams         bool
 	selectorErr             error
 	projectSelectorCalls    int
@@ -204,13 +207,20 @@ func (r *testRuntime) options() Options {
 		SelectAction: func(_ context.Context, title string, actions []tui.Action, input io.Reader, output io.Writer) (*tui.Action, error) {
 			r.selectorCalls++
 			r.selectorTitle = title
+			r.selectorTitles = append(r.selectorTitles, title)
 			r.selectorActions = append([]tui.Action(nil), actions...)
+			r.selectorActionSets = append(r.selectorActionSets, append([]tui.Action(nil), actions...))
 			r.selectorStreams = input == r.stdin && output == &r.stdout
 			if r.selectorErr != nil {
 				return nil, r.selectorErr
 			}
+			selectedID := r.selectedAction
+			if len(r.actionSelections) > 0 {
+				selectedID = r.actionSelections[0]
+				r.actionSelections = r.actionSelections[1:]
+			}
 			for _, action := range actions {
-				if action.ID == r.selectedAction {
+				if action.ID == selectedID {
 					selected := action
 					return &selected, nil
 				}
@@ -395,15 +405,68 @@ func TestTargetedActionSelectorIncludesConfiguredActionsAndGatesGUIAction(t *tes
 	for index, action := range runtime.selectorActions {
 		got[index] = action.ID
 	}
-	if want := []string{"nvim", "shell", "code", "Nvim", "3"}; !slices.Equal(got, want) {
+	if want := []string{"nvim", "shell", "code", "choose-another-project", "Nvim", "3"}; !slices.Equal(got, want) {
 		t.Fatalf("selector actions = %v, want %v", got, want)
 	}
 	labels := make([]string, len(runtime.selectorActions))
 	for index, action := range runtime.selectorActions {
 		labels[index] = action.Name
 	}
-	if want := []string{"nvim", "cd-here", "vs-code", "nvim", "3"}; !slices.Equal(labels, want) {
+	if want := []string{"nvim", "cd-here", "vs-code", "choose-another-project", "nvim", "3"}; !slices.Equal(labels, want) {
 		t.Fatalf("selector labels = %v, want %v", labels, want)
+	}
+}
+
+func TestChooseAnotherProjectOpensThatProjectsActionMenu(t *testing.T) {
+	runtime := newTestRuntime()
+	runtime.lookup["TMUX"] = "inside"
+	runtime.service.current = domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"}
+	runtime.service.currentFound = true
+	other := domain.Project{ID: "p2", Name: "beta", Path: "/repos/beta"}
+	runtime.service.projects = []domain.Project{runtime.service.current, other}
+	runtime.selectedProject = other.ID
+	runtime.actionSelections = []string{"choose-another-project", "opencode"}
+
+	if code := Run(context.Background(), nil, runtime.options()); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if runtime.projectSelectorCalls != 1 || runtime.projectSelectorTitle != "choose project" {
+		t.Fatalf("project selector calls=%d title=%q", runtime.projectSelectorCalls, runtime.projectSelectorTitle)
+	}
+	if runtime.selectorCalls != 2 || !slices.Equal(runtime.selectorTitles, []string{"actions for alpha", "actions for beta"}) {
+		t.Fatalf("selector calls=%d titles=%v", runtime.selectorCalls, runtime.selectorTitles)
+	}
+	if runtime.service.actionCalls != 1 || runtime.service.actionRequest != (domain.RunProjectActionRequest{ProjectID: "p2", Action: "opencode"}) {
+		t.Fatalf("action calls=%d request=%+v", runtime.service.actionCalls, runtime.service.actionRequest)
+	}
+	if runtime.service.openRequest.ProjectID != "" || runtime.service.attachCalls != 0 {
+		t.Fatalf("open=%+v attach=%d", runtime.service.openRequest, runtime.service.attachCalls)
+	}
+	secondMenu := make([]string, len(runtime.selectorActionSets[1]))
+	for index, action := range runtime.selectorActionSets[1] {
+		secondMenu[index] = action.ID
+	}
+	if slices.Contains(secondMenu, "choose-another-project") {
+		t.Fatalf("second menu included choose-another-project: %v", secondMenu)
+	}
+	if want := []string{"nvim", "shell", "opencode"}; !slices.Equal(secondMenu, want) {
+		t.Fatalf("second menu = %v, want %v", secondMenu, want)
+	}
+}
+
+func TestChooseAnotherProjectCancelDoesNotOpenActionMenu(t *testing.T) {
+	runtime := newTestRuntime()
+	runtime.lookup["TMUX"] = "inside"
+	runtime.service.current = domain.Project{ID: "p1", Name: "alpha"}
+	runtime.service.currentFound = true
+	runtime.selectedAction = "choose-another-project"
+	runtime.service.projects = []domain.Project{{ID: "p2", Name: "beta", Path: "/repos/beta"}}
+
+	if code := Run(context.Background(), nil, runtime.options()); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if runtime.selectorCalls != 1 || runtime.projectSelectorCalls != 1 || runtime.service.actionCalls != 0 || runtime.service.openRequest.ProjectID != "" || runtime.service.attachCalls != 0 {
+		t.Fatalf("selector=%d projects=%d actions=%d open=%+v attach=%d", runtime.selectorCalls, runtime.projectSelectorCalls, runtime.service.actionCalls, runtime.service.openRequest, runtime.service.attachCalls)
 	}
 }
 

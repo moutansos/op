@@ -117,7 +117,7 @@ Commands:
 
 | Command                                                                       | Behavior                                                                                                                                                                                    |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `op`                                                                          | In a random shell, fuzzy-select and open a project. Inside a tagged or matching project window, open its action selector instead.                                         |
+| `op`                                                                          | In a random shell, fuzzy-select and open a project. Inside a tagged or matching project window, open its action selector instead. The selector includes `choose-another-project`, which opens the same action menu for another project. |
 | `op dashboard`                                                                | Run the dashboard in the current terminal pane. Normally started by session reconciliation.                                                                                                 |
 | `op projects [--json]`                                                        | List discovered projects and custom entries.                                                                                                                                                |
 | `op open <id-or-exact-name> [--profile NAME] [--new-instance]`                | Open a project with the default or named configured opener. `--new-instance` applies to tmux openers.                                                                                        |
@@ -143,11 +143,14 @@ client, directly to the selected project window; a GUI opener launches without c
 
 When plain `op` is run inside a project window, it first resolves the `@op-project-id` window tag,
 then falls back to an exact project/window-name match. It opens an in-process fuzzy selector for
-`nvim`, `cd-here`, optional `vs-code`, and configured custom actions. Typing filters immediately;
-`up`/`down` or `ctrl+p`/`ctrl+n` navigates, `enter` selects, and `esc`/`ctrl+c` cancels. The selector
-uses Bubble Tea/Bubbles, invokes no external `fzf`, and restores the terminal before starting the
-selected action. `--no-target` bypasses both targeted project actions and random-shell project
-selection, returning to the managed dashboard instead.
+`nvim`, `cd-here`, optional `vs-code`, `choose-another-project`, and configured custom actions.
+Typing filters immediately; `up`/`down` or `ctrl+p`/`ctrl+n` navigates, `enter` selects, and
+`esc`/`ctrl+c` cancels. The selector uses Bubble Tea/Bubbles, invokes no external `fzf`, and restores
+the terminal before starting the selected action. `choose-another-project` opens the project catalog
+and then the same action menu for the chosen project, so `nvim`, `cd-here`, optional `vs-code`, and
+custom commands run against that project instead of the current window. That second menu does not
+offer `choose-another-project` again. `--no-target` bypasses both targeted project actions and
+random-shell project selection, returning to the managed dashboard instead.
 
 Opening an existing project selects its healthy tagged window. `--new-instance` creates a suffixed
 additional window. A normal local `open` fast-forward pulls a clean Git worktree before opening it
@@ -187,7 +190,10 @@ managed session.
 
 Dashboard search openers are separate from actions available when plain `op` targets an already-open
 project. Dashboard `enter` and `a` choose how the project should open; the targeted selector keeps
-`nvim`, `cd-here`, optional `vs-code`, and custom commands as actions against the current project. Create,
+`nvim`, `cd-here`, optional `vs-code`, `choose-another-project`, and custom commands. The first three
+and custom commands act on the current project. `choose-another-project` opens the project catalog
+and then that project's action menu, without offering another project switch.
+Create,
 clone, and worktree forms open their result using the configured default profile.
 
 ## Configuration
