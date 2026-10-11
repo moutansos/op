@@ -395,15 +395,59 @@ func TestTargetedActionSelectorIncludesConfiguredActionsAndGatesGUIAction(t *tes
 	for index, action := range runtime.selectorActions {
 		got[index] = action.ID
 	}
-	if want := []string{"nvim", "shell", "code", "Nvim", "3"}; !slices.Equal(got, want) {
+	if want := []string{"nvim", "shell", "code", "choose-another-project", "Nvim", "3"}; !slices.Equal(got, want) {
 		t.Fatalf("selector actions = %v, want %v", got, want)
 	}
 	labels := make([]string, len(runtime.selectorActions))
 	for index, action := range runtime.selectorActions {
 		labels[index] = action.Name
 	}
-	if want := []string{"nvim", "cd-here", "vs-code", "nvim", "3"}; !slices.Equal(labels, want) {
+	if want := []string{"nvim", "cd-here", "vs-code", "choose-another-project", "nvim", "3"}; !slices.Equal(labels, want) {
 		t.Fatalf("selector labels = %v, want %v", labels, want)
+	}
+}
+
+func TestChooseAnotherProjectOpensCatalogInsteadOfRunningAction(t *testing.T) {
+	runtime := newTestRuntime()
+	runtime.lookup["TMUX"] = "inside"
+	runtime.service.current = domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"}
+	runtime.service.currentFound = true
+	runtime.selectedAction = "choose-another-project"
+	other := domain.Project{ID: "p2", Name: "beta", Path: "/repos/beta"}
+	runtime.service.projects = []domain.Project{runtime.service.current, other}
+	runtime.selectedProject = other.ID
+	runtime.service.openResult = domain.OpenProjectResult{
+		Project: other, Profile: "nvim", Mode: domain.ProjectOpenModeTmux,
+		Window: domain.TmuxWindow{ID: "@9", Name: "beta"},
+	}
+
+	if code := Run(context.Background(), nil, runtime.options()); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if runtime.selectorCalls != 1 || runtime.service.actionCalls != 0 {
+		t.Fatalf("selector=%d action calls=%d request=%+v", runtime.selectorCalls, runtime.service.actionCalls, runtime.service.actionRequest)
+	}
+	if runtime.projectSelectorCalls != 1 || runtime.projectSelectorTitle != "open project" {
+		t.Fatalf("project selector calls=%d title=%q", runtime.projectSelectorCalls, runtime.projectSelectorTitle)
+	}
+	if runtime.service.openRequest.ProjectID != other.ID || !runtime.service.openRequest.DeferSelection || runtime.service.attachWindowID != "@9" {
+		t.Fatalf("open=%+v attach=%q", runtime.service.openRequest, runtime.service.attachWindowID)
+	}
+}
+
+func TestChooseAnotherProjectCancelDoesNotOpen(t *testing.T) {
+	runtime := newTestRuntime()
+	runtime.lookup["TMUX"] = "inside"
+	runtime.service.current = domain.Project{ID: "p1", Name: "alpha"}
+	runtime.service.currentFound = true
+	runtime.selectedAction = "choose-another-project"
+	runtime.service.projects = []domain.Project{{ID: "p2", Name: "beta", Path: "/repos/beta"}}
+
+	if code := Run(context.Background(), nil, runtime.options()); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	if runtime.projectSelectorCalls != 1 || runtime.service.actionCalls != 0 || runtime.service.openRequest.ProjectID != "" || runtime.service.attachCalls != 0 {
+		t.Fatalf("selector=%d actions=%d open=%+v attach=%d", runtime.projectSelectorCalls, runtime.service.actionCalls, runtime.service.openRequest, runtime.service.attachCalls)
 	}
 }
 

@@ -20,6 +20,10 @@ import (
 	"github.com/moutansos/op/internal/tui"
 )
 
+// chooseAnotherProjectID is a selector-only action. It is not a project action ID:
+// choosing it reopens the project catalog instead of calling RunProjectAction.
+const chooseAnotherProjectID = "choose-another-project"
+
 func (r *runner) runLocal(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return r.runDefault(ctx)
@@ -106,6 +110,7 @@ func (r *runner) chooseProjectAction(ctx context.Context, service Service, proje
 	if r.config.Actions.GUIEditors {
 		actions = append(actions, tui.Action{Name: "vs-code", ID: actionpolicy.CodeID})
 	}
+	actions = append(actions, tui.Action{Name: "choose-another-project", ID: chooseAnotherProjectID})
 	for index, command := range r.config.CustomCommands {
 		if err := actionpolicy.ValidateCustomName(command.Name); err != nil {
 			return domain.FieldError(domain.ErrorCodeConfig, "cli.action", fmt.Sprintf("customCommands[%d].name", index), err.Error())
@@ -118,6 +123,9 @@ func (r *runner) chooseProjectAction(ctx context.Context, service Service, proje
 	}
 	if chosen == nil {
 		return nil
+	}
+	if chosen.ID == chooseAnotherProjectID {
+		return r.chooseProjectToOpen(ctx, service)
 	}
 	result, err := service.RunProjectAction(ctx, domain.RunProjectActionRequest{ProjectID: project.ID, Action: chosen.ID})
 	if err != nil {

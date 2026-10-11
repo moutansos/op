@@ -117,7 +117,7 @@ Commands:
 
 | Command                                                                       | Behavior                                                                                                                                                                                    |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `op`                                                                          | In a random shell, fuzzy-select and open a project. Inside a tagged or matching project window, open its action selector instead.                                         |
+| `op`                                                                          | In a random shell, fuzzy-select and open a project. Inside a tagged or matching project window, open its action selector instead. The selector includes `choose-another-project`, which opens the project catalog. |
 | `op dashboard`                                                                | Run the dashboard in the current terminal pane. Normally started by session reconciliation.                                                                                                 |
 | `op projects [--json]`                                                        | List discovered projects and custom entries.                                                                                                                                                |
 | `op open <id-or-exact-name> [--profile NAME] [--new-instance]`                | Open a project with the default or named configured opener. `--new-instance` applies to tmux openers.                                                                                        |
@@ -143,10 +143,12 @@ client, directly to the selected project window; a GUI opener launches without c
 
 When plain `op` is run inside a project window, it first resolves the `@op-project-id` window tag,
 then falls back to an exact project/window-name match. It opens an in-process fuzzy selector for
-`nvim`, `cd-here`, optional `vs-code`, and configured custom actions. Typing filters immediately;
-`up`/`down` or `ctrl+p`/`ctrl+n` navigates, `enter` selects, and `esc`/`ctrl+c` cancels. The selector
-uses Bubble Tea/Bubbles, invokes no external `fzf`, and restores the terminal before starting the
-selected action. `--no-target` bypasses both targeted project actions and random-shell project
+`nvim`, `cd-here`, optional `vs-code`, `choose-another-project`, and configured custom actions.
+Typing filters immediately; `up`/`down` or `ctrl+p`/`ctrl+n` navigates, `enter` selects, and
+`esc`/`ctrl+c` cancels. The selector uses Bubble Tea/Bubbles, invokes no external `fzf`, and restores
+the terminal before starting the selected action. `choose-another-project` leaves the current window
+and opens the same project catalog used from a random shell, so another project can be opened with
+the default profile. `--no-target` bypasses both targeted project actions and random-shell project
 selection, returning to the managed dashboard instead.
 
 Opening an existing project selects its healthy tagged window. `--new-instance` creates a suffixed
@@ -187,7 +189,9 @@ managed session.
 
 Dashboard search openers are separate from actions available when plain `op` targets an already-open
 project. Dashboard `enter` and `a` choose how the project should open; the targeted selector keeps
-`nvim`, `cd-here`, optional `vs-code`, and custom commands as actions against the current project. Create,
+`nvim`, `cd-here`, optional `vs-code`, `choose-another-project`, and custom commands. The first three
+and custom commands act on the current project; `choose-another-project` opens the project catalog.
+Create,
 clone, and worktree forms open their result using the configured default profile.
 
 ## Configuration
