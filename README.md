@@ -126,7 +126,7 @@ Commands:
 
 | Command                                                                       | Behavior                                                                                                                                                                                    |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `op`                                                                          | In a random shell, fuzzy-select and open a project. Inside a tagged or matching project window, open its action selector instead. The selector includes `choose-another-project`, which opens the same action menu for another project. |
+| `op`                                                                          | Outside a project window, fuzzy-select a project, then choose an action that runs in this terminal or an opener that opens it in the managed session. Inside a tagged or matching project window, open that project's action selector instead. The selector includes `choose-another-project`, which opens the same action menu for another project. |
 | `op dashboard`                                                                | Run the dashboard in the current terminal pane. Normally started by session reconciliation.                                                                                                 |
 | `op projects [--json]`                                                        | List discovered projects and custom entries.                                                                                                                                                |
 | `op open <id-or-exact-name> [--profile NAME] [--new-instance]`                | Open a project with the default or named configured opener. `--new-instance` applies to tmux openers.                                                                                        |
@@ -145,10 +145,18 @@ Use `op help`, `op remote --help`, or `op <command> --help` for concise command 
 
 ### Default Behavior
 
-From an ordinary shell, plain `op` lists the project catalog in an in-process fuzzy selector. Search
-matches project names, path names, full paths, and tags. Selecting a project opens it with the
-configured default profile. A tmux opener attaches an outside shell, or switches an existing tmux
-client, directly to the selected project window; a GUI opener launches without changing tmux.
+Anywhere other than a project window, plain `op` lists the project catalog in an in-process fuzzy
+selector. This includes a plain terminal, another tmux session, and a non-project window inside the
+managed session. Search matches project names, path names, full paths, and tags. Selecting a project
+then opens one action menu with two groups:
+
+- Actions that run in the current terminal and leave the managed session alone: `nvim`, `cd-here`,
+  optional `vs-code`, and configured custom commands. These come first.
+- Every configured project opener, default profile first, which opens the project in the managed
+  session. A tmux opener attaches an outside shell, or switches an existing tmux client, directly to
+  the project window; a GUI opener launches without changing tmux.
+
+Each item is labeled with where it runs.
 
 When plain `op` is run inside a project window, it first resolves the `@op-project-id` window tag,
 then falls back to an exact project/window-name match. It opens an in-process fuzzy selector for

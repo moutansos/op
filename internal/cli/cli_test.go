@@ -128,6 +128,7 @@ type testRuntime struct {
 	warnings                []config.Warning
 	customCommands          []config.CustomCommand
 	projectOpeners          []config.ProjectOpener
+	defaultProfile          string
 	guiEditors              bool
 	selectedAction          string
 	actionSelections        []string
@@ -168,6 +169,9 @@ func (r *testRuntime) options() Options {
 	if r.projectOpeners != nil {
 		cfg.ProjectOpeners = r.projectOpeners
 		cfg.Tmux.DefaultProfile = r.projectOpeners[0].ID
+	}
+	if r.defaultProfile != "" {
+		cfg.Tmux.DefaultProfile = r.defaultProfile
 	}
 	cfg.Actions.GUIEditors = r.guiEditors
 	return Options{
@@ -262,6 +266,7 @@ func TestDefaultDispatchSelectsAndOpensProjectFromRandomShell(t *testing.T) {
 			project := domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha", Tags: []string{"api"}}
 			runtime.service.projects = []domain.Project{project}
 			runtime.selectedProject = project.ID
+			runtime.selectedAction = "open-in-session:nvim"
 			runtime.service.openResult = domain.OpenProjectResult{
 				Project: project, Profile: "nvim", Mode: domain.ProjectOpenModeTmux,
 				Window: domain.TmuxWindow{ID: "@7", Name: "alpha"},
@@ -280,7 +285,10 @@ func TestDefaultDispatchSelectsAndOpensProjectFromRandomShell(t *testing.T) {
 			if len(runtime.projectSelectorProjects) != 1 || runtime.projectSelectorProjects[0].ID != project.ID || runtime.projectSelectorProjects[0].Path != project.Path {
 				t.Fatalf("selector projects = %+v", runtime.projectSelectorProjects)
 			}
-			if runtime.service.openRequest.ProjectID != project.ID || !runtime.service.openRequest.DeferSelection || runtime.service.openRequest.Profile != "" || runtime.service.openRequest.NewInstance {
+			if runtime.selectorCalls != 1 || runtime.selectorTitle != "actions for alpha" {
+				t.Fatalf("action selector calls=%d title=%q", runtime.selectorCalls, runtime.selectorTitle)
+			}
+			if runtime.service.openRequest.ProjectID != project.ID || !runtime.service.openRequest.DeferSelection || runtime.service.openRequest.Profile != "nvim" || runtime.service.openRequest.NewInstance {
 				t.Fatalf("open request = %+v", runtime.service.openRequest)
 			}
 			if runtime.service.attachCalls != 1 || runtime.service.attachWindowID != "@7" || runtime.service.actionCalls != 0 {
@@ -350,12 +358,77 @@ func TestRandomShellGUIProjectOpenDoesNotAttachTmux(t *testing.T) {
 	project := domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"}
 	runtime.service.projects = []domain.Project{project}
 	runtime.selectedProject = project.ID
+	runtime.projectOpeners = testOpeners()
+	runtime.selectedAction = "open-in-session:vscode"
 	runtime.service.openResult = domain.OpenProjectResult{Project: project, Profile: "vscode", Mode: domain.ProjectOpenModeGUI}
 	if code := Run(context.Background(), nil, runtime.options()); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
 	}
-	if runtime.service.attachCalls != 0 || !strings.Contains(runtime.stdout.String(), "Opened alpha with vscode") {
-		t.Fatalf("attach=%d stdout=%q", runtime.service.attachCalls, runtime.stdout.String())
+	if runtime.service.openRequest.Profile != "vscode" || runtime.service.attachCalls != 0 || !strings.Contains(runtime.stdout.String(), "Opened alpha with vscode") {
+		t.Fatalf("open=%+v attach=%d stdout=%q", runtime.service.openRequest, runtime.service.attachCalls, runtime.stdout.String())
+	}
+}
+
+func testOpeners() []config.ProjectOpener {
+	return []config.ProjectOpener{
+		{ID: "nvim", Name: "Neovim in tmux", Mode: domain.ProjectOpenModeTmux, Command: "nvim ."},
+		{ID: "vscode", Name: "VS Code", Mode: domain.ProjectOpenModeGUI, Command: "code {{path}}"},
+	}
+}
+
+func TestRandomShellMenuListsHereActionsBeforeSessionOpeners(t *testing.T) {
+	runtime := newTestRuntime()
+	project := domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"}
+	runtime.service.projects = []domain.Project{project}
+	runtime.selectedProject = project.ID
+	runtime.projectOpeners = []config.ProjectOpener{testOpeners()[1], testOpeners()[0]}
+	runtime.defaultProfile = "nvim"
+	runtime.selectedAction = ""
+	runtime.lookup["TMUX"] = "inside"
+
+	if code := Run(context.Background(), nil, runtime.options()); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+	}
+	var ids, labels, descriptions []string
+	for _, action := range runtime.selectorActions {
+		ids = append(ids, action.ID)
+		labels = append(labels, action.Name)
+		descriptions = append(descriptions, action.Description)
+	}
+	if want := []string{"nvim", "shell", "opencode", "open-in-session:nvim", "open-in-session:vscode"}; !slices.Equal(ids, want) {
+		t.Fatalf("menu ids = %v, want %v", ids, want)
+	}
+	if want := []string{"nvim", "cd-here", "opencode", "Neovim in tmux", "VS Code"}; !slices.Equal(labels, want) {
+		t.Fatalf("menu labels = %v, want %v", labels, want)
+	}
+	here := "runs in this terminal"
+	if want := []string{here, here, here, `opens in tmux session "code"`, "opens as a separate application"}; !slices.Equal(descriptions, want) {
+		t.Fatalf("menu descriptions = %v, want %v", descriptions, want)
+	}
+	if runtime.service.actionCalls != 0 || runtime.service.openRequest.ProjectID != "" || runtime.service.attachCalls != 0 {
+		t.Fatalf("canceled menu dispatched: actions=%d open=%+v attach=%d", runtime.service.actionCalls, runtime.service.openRequest, runtime.service.attachCalls)
+	}
+}
+
+func TestRandomShellHereActionRunsInCurrentTerminal(t *testing.T) {
+	for _, action := range []string{"shell", "nvim", "opencode"} {
+		t.Run(action, func(t *testing.T) {
+			runtime := newTestRuntime()
+			project := domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"}
+			runtime.service.projects = []domain.Project{project}
+			runtime.selectedProject = project.ID
+			runtime.selectedAction = action
+
+			if code := Run(context.Background(), nil, runtime.options()); code != 0 {
+				t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+			}
+			if runtime.service.actionRequest != (domain.RunProjectActionRequest{ProjectID: "p1", Action: action}) {
+				t.Fatalf("action request = %+v", runtime.service.actionRequest)
+			}
+			if runtime.service.openRequest.ProjectID != "" || runtime.service.attachCalls != 0 || runtime.service.ensureCalls != 0 {
+				t.Fatalf("here action touched the session: open=%+v attach=%d ensure=%d", runtime.service.openRequest, runtime.service.attachCalls, runtime.service.ensureCalls)
+			}
+		})
 	}
 }
 

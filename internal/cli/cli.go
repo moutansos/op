@@ -345,8 +345,9 @@ Commands:
   remote projects|clone|open|job    Call a remote op server
   version                           Print build information
 
-Running op without a command ensures and attaches to (or switches to) the
-managed tmux session. Inside a project window it opens a fuzzy local-action selector.
+Running op without a command picks a project, then an action that runs in
+this terminal or an opener that opens it in the managed tmux session. Inside
+a project window it opens that project's action selector instead.
 Use "op <command> --help" for command flags.
 `)
 }

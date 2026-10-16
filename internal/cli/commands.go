@@ -25,6 +25,11 @@ import (
 // instead of calling RunProjectAction.
 const chooseAnotherProjectID = "choose-another-project"
 
+// openInSessionIDPrefix marks selector-only items that open the project with
+// a configured project opener in the managed session instead of running an
+// action in the current terminal.
+const openInSessionIDPrefix = "open-in-session:"
+
 func (r *runner) runLocal(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return r.runDefault(ctx)
@@ -64,7 +69,7 @@ func (r *runner) runDefault(ctx context.Context) error {
 			return err
 		}
 		if found {
-			return r.chooseProjectAction(ctx, service, project, true)
+			return r.runProjectMenu(ctx, service, project, true, false)
 		}
 	}
 	if !r.globals.noTarget {
@@ -80,12 +85,19 @@ func (r *runner) runDefault(ctx context.Context) error {
 	return service.AttachOrSwitch(ctx)
 }
 
+// chooseProjectToOpen runs outside a project window: the chosen project's
+// menu offers actions in this terminal first and then the configured openers
+// that open it in the managed session.
 func (r *runner) chooseProjectToOpen(ctx context.Context, service Service) error {
 	project, err := r.selectProject(ctx, service, "open project")
 	if err != nil || project == nil {
 		return err
 	}
-	result, err := service.OpenProject(ctx, domain.OpenProjectRequest{ProjectID: project.ID, DeferSelection: true})
+	return r.runProjectMenu(ctx, service, *project, false, true)
+}
+
+func (r *runner) openInSession(ctx context.Context, service Service, project domain.Project, profile string) error {
+	result, err := service.OpenProject(ctx, domain.OpenProjectRequest{ProjectID: project.ID, Profile: profile, DeferSelection: true})
 	if err != nil {
 		return err
 	}
@@ -94,6 +106,29 @@ func (r *runner) chooseProjectToOpen(ctx context.Context, service Service) error
 		return nil
 	}
 	return service.AttachOrSwitchTo(ctx, result.Window.ID)
+}
+
+func (r *runner) sessionOpenerActions() []tui.Action {
+	ordered := make([]config.ProjectOpener, 0, len(r.config.ProjectOpeners))
+	for _, opener := range r.config.ProjectOpeners {
+		if opener.ID == r.config.Tmux.DefaultProfile {
+			ordered = append([]config.ProjectOpener{opener}, ordered...)
+		} else {
+			ordered = append(ordered, opener)
+		}
+	}
+	actions := make([]tui.Action, 0, len(ordered))
+	for _, opener := range ordered {
+		description := fmt.Sprintf("opens in tmux session %q", r.config.Tmux.Session)
+		if opener.Mode == domain.ProjectOpenModeGUI {
+			description = "opens as a separate application"
+		}
+		actions = append(actions, tui.Action{
+			Name: opener.Name, ID: openInSessionIDPrefix + opener.ID, Description: description,
+			Search: opener.Name + " " + opener.ID + " " + description,
+		})
+	}
+	return actions
 }
 
 func (r *runner) selectProject(ctx context.Context, service Service, title string) (*domain.Project, error) {
@@ -113,10 +148,13 @@ func (r *runner) chooseAnotherProject(ctx context.Context, service Service) erro
 	if err != nil || project == nil {
 		return err
 	}
-	return r.chooseProjectAction(ctx, service, *project, false)
+	return r.runProjectMenu(ctx, service, *project, false, false)
 }
 
-func (r *runner) chooseProjectAction(ctx context.Context, service Service, project domain.Project, allowSwitch bool) error {
+// runProjectMenu offers actions that run in the current terminal. allowSwitch
+// adds choose-another-project; includeOpeners appends the configured project
+// openers, which open the project in the managed session instead.
+func (r *runner) runProjectMenu(ctx context.Context, service Service, project domain.Project, allowSwitch, includeOpeners bool) error {
 	actions := []tui.Action{
 		{Name: "nvim", ID: actionpolicy.NvimID},
 		{Name: "cd-here", ID: actionpolicy.ShellID},
@@ -133,6 +171,12 @@ func (r *runner) chooseProjectAction(ctx context.Context, service Service, proje
 		}
 		actions = append(actions, tui.Action{Name: strings.ToLower(command.Name), ID: command.Name})
 	}
+	if includeOpeners {
+		for index := range actions {
+			actions[index].Description = "runs in this terminal"
+		}
+		actions = append(actions, r.sessionOpenerActions()...)
+	}
 	chosen, err := r.options.SelectAction(ctx, "actions for "+project.Name, actions, r.options.Stdin, r.options.Stdout)
 	if err != nil {
 		return domain.NewError(domain.CodeOf(err), "cli.action", "select project action", err)
@@ -142,6 +186,9 @@ func (r *runner) chooseProjectAction(ctx context.Context, service Service, proje
 	}
 	if chosen.ID == chooseAnotherProjectID {
 		return r.chooseAnotherProject(ctx, service)
+	}
+	if profile, found := strings.CutPrefix(chosen.ID, openInSessionIDPrefix); found && includeOpeners {
+		return r.openInSession(ctx, service, project, profile)
 	}
 	result, err := service.RunProjectAction(ctx, domain.RunProjectActionRequest{ProjectID: project.ID, Action: chosen.ID})
 	if err != nil {
