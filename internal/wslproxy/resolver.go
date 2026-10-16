@@ -1,7 +1,8 @@
 package wslproxy
 
 // ResolverScript is fixed non-login shell source. The requested executable
-// and every user argument are supplied separately as positional parameters.
+// and every user argument are supplied separately as positional parameters,
+// each carrying argumentPrefix so that none of them is empty.
 const ResolverScript = `
 marker='` + BinaryMarker + `'
 validate_candidate() {
@@ -33,12 +34,20 @@ validate_candidate() {
     return 0
 }
 
+remaining=$#
+while [ "$remaining" -gt 0 ]; do
+    argument=$1
+    shift
+    set -- "$@" "${argument#?}"
+    remaining=$((remaining - 1))
+done
+
 requested=$1
 shift
 candidate=
 if [ -n "$requested" ]; then
     if ! validate_candidate "$requested"; then
-        printf '%s\n' "error: wsl proxy: OP_WSL_OP is invalid: $validation_error" >&2
+        printf '%s\n' "error: wsl proxy: configured Linux op $requested (op in %APPDATA%\\op\\wsl.json or OP_WSL_OP) is invalid: $validation_error" >&2
         exit 126
     fi
     candidate=$requested
@@ -51,7 +60,7 @@ else
         fi
     done
     if [ -z "$candidate" ]; then
-        printf '%s\n' 'error: wsl proxy: this project Linux op ELF was not found in PATH or common install locations; install it in WSL or set OP_WSL_OP' >&2
+        printf '%s\n' 'error: wsl proxy: this project Linux op ELF was not found in PATH or common install locations; install it in WSL or set op in %APPDATA%\op\wsl.json' >&2
         exit 127
     fi
 fi

@@ -11,12 +11,15 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/moutansos/op/internal/action"
 	"github.com/moutansos/op/internal/agents"
 	"github.com/moutansos/op/internal/config"
 	"github.com/moutansos/op/internal/domain"
 	gitrepo "github.com/moutansos/op/internal/git"
+	"github.com/moutansos/op/internal/gitstatus"
 	"github.com/moutansos/op/internal/process"
 	"github.com/moutansos/op/internal/project"
 	"github.com/moutansos/op/internal/stats"
@@ -26,6 +29,9 @@ import (
 const (
 	defaultDashboardCommand = "op dashboard"
 	defaultTreeCommand      = "op tree"
+	// oneShotGitStatusBudget bounds how long a command without a background
+	// refresher waits on git before showing the last cached state.
+	oneShotGitStatusBudget = time.Second
 )
 
 // Catalog is the project discovery and safe-path boundary used by Service.
@@ -92,8 +98,12 @@ type Options struct {
 	DashboardCommand        string
 	TreeCommand             string
 	OperationLockDirectory  string
-	Output                  io.Writer
-	Error                   io.Writer
+	// GitStatusCachePath shares repository state between op processes. New
+	// uses the per-user default when empty; NewWithDependencies keeps the
+	// cache in memory.
+	GitStatusCachePath string
+	Output             io.Writer
+	Error              io.Writer
 }
 
 // Service is the concrete domain.Service implementation.
@@ -109,6 +119,9 @@ type Service struct {
 	updateRepos    bool
 	projectOpeners map[string]config.ProjectOpener
 	customCommands map[string]struct{}
+	gitStatus      *gitstatus.Cache
+	gitInterval    time.Duration
+	gitBackground  atomic.Bool
 }
 
 var _ domain.Service = (*Service)(nil)
@@ -173,6 +186,9 @@ func New(ctx context.Context, cfg config.Config, options Options) (*Service, err
 	if err != nil {
 		return nil, typed(ctx, op, domain.ErrorCodeConfig, "configure agent detection", err)
 	}
+	if options.GitStatusCachePath == "" {
+		options.GitStatusCachePath = gitstatus.DefaultPath()
+	}
 	return NewWithDependencies(cfg, Dependencies{
 		Catalog:    catalog,
 		Repository: gitrepo.NewRepository(),
@@ -234,33 +250,76 @@ func NewWithDependencies(cfg config.Config, dependencies Dependencies, options O
 	if err != nil {
 		return nil, domain.FieldError(domain.ErrorCodeInvalidArgument, op, "operationLockDirectory", err.Error())
 	}
+	locks := newKeyedLocks(lockDirectory)
+	gitStatus := gitstatus.New(dependencies.Repository, gitstatus.Options{
+		Path: options.GitStatusCachePath,
+		Lock: func(ctx context.Context) (func(), error) { return locks.acquire(ctx, "git-status-refresh") },
+	})
 	return &Service{
 		config: cfg, catalog: dependencies.Catalog, repository: dependencies.Repository,
 		launcher: dependencies.Launcher, tmux: dependencies.Tmux, stats: dependencies.Stats,
-		locks: newKeyedLocks(lockDirectory), tmuxLockKey: tmuxSessionLockKey(cfg), updateRepos: options.EnableRepositoryUpdates,
+		locks: locks, tmuxLockKey: tmuxSessionLockKey(cfg), updateRepos: options.EnableRepositoryUpdates,
 		projectOpeners: openers, customCommands: commands,
+		gitStatus: gitStatus, gitInterval: cfg.Stats.GitRefreshInterval.Duration,
 	}, nil
 }
 
-// ListProjects returns a fresh catalog snapshot enriched with repository state.
+// ListProjects returns a fresh catalog snapshot enriched with cached
+// repository state. While a background refresher runs it never invokes git;
+// otherwise it re-checks entries older than two refresh intervals for at most
+// oneShotGitStatusBudget and leaves the rest at their last known state.
 func (s *Service) ListProjects(ctx context.Context) ([]domain.Project, error) {
 	const op = "app.list_projects"
 	projects, err := s.catalog.List(ctx)
 	if err != nil {
 		return nil, typed(ctx, op, domain.ErrorCodeInternal, "list project catalog", err)
 	}
+	paths := repositoryPaths(projects)
+	if !s.gitBackground.Load() {
+		budgetCtx, cancel := context.WithTimeout(ctx, oneShotGitStatusBudget)
+		s.gitStatus.Refresh(budgetCtx, paths, 2*s.gitInterval)
+		cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, typed(ctx, op, domain.ErrorCodeInternal, "inspect project state", err)
+	}
+	states := s.gitStatus.Lookup(paths)
 	for i := range projects {
-		if projects[i].Kind == domain.ProjectKindCustomEntry {
-			continue
+		if entry, found := states[projects[i].Path]; found && projects[i].Kind != domain.ProjectKindCustomEntry {
+			projects[i].Branch = entry.Branch
+			projects[i].GitState = entry.Git
 		}
-		state, err := s.repository.State(ctx, projects[i].Path)
-		if err != nil {
-			return nil, typed(ctx, op, domain.ErrorCodeInternal, "inspect project state", err)
-		}
-		projects[i].Branch = state.Branch
-		projects[i].GitState = state.Git
 	}
 	return projects, nil
+}
+
+// RefreshGitStatusInBackground keeps repository state current for a
+// long-running front end until ctx ends. ListProjects then only reads the
+// cache, so dashboards and API requests never wait on git.
+func (s *Service) RefreshGitStatusInBackground(ctx context.Context) {
+	if !s.gitBackground.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer s.gitBackground.Store(false)
+		s.gitStatus.Run(ctx, s.gitInterval, func(listCtx context.Context) ([]string, error) {
+			projects, err := s.catalog.List(listCtx)
+			if err != nil {
+				return nil, err
+			}
+			return repositoryPaths(projects), nil
+		})
+	}()
+}
+
+func repositoryPaths(projects []domain.Project) []string {
+	paths := make([]string, 0, len(projects))
+	for _, project := range projects {
+		if project.Kind != domain.ProjectKindCustomEntry {
+			paths = append(paths, project.Path)
+		}
+	}
+	return paths
 }
 
 // CreateProject safely initializes a repository and refreshes it through the catalog.
@@ -454,6 +513,7 @@ func (s *Service) openResolved(ctx context.Context, project domain.Project, prof
 		}
 		project.Branch = state.Branch
 		project.GitState = state.Git
+		s.gitStatus.Record(project.Path, state)
 		if state.Git == domain.GitStateClean {
 			if err := s.repository.Pull(ctx, project.Path); err != nil {
 				return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeInternal, "pull project", err)

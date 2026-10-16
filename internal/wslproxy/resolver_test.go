@@ -158,8 +158,8 @@ func resolverCommand(candidate string, arguments ...string) *exec.Cmd {
 }
 
 func resolverCommandContext(ctx context.Context, candidate string, arguments ...string) *exec.Cmd {
-	commandArgs := []string{"-c", ResolverScript, resolverName, candidate}
-	commandArgs = append(commandArgs, arguments...)
+	commandArgs := []string{"-c", ResolverScript, resolverName}
+	commandArgs = append(commandArgs, resolverArguments(candidate, arguments)...)
 	command := exec.CommandContext(ctx, "/bin/sh", commandArgs...)
 	command.Env = setTestEnvironment(os.Environ(), resolverHelperEnv, "1")
 	command.Env = setTestEnvironment(command.Env, "OP_WSL_PROXY_ACTIVE", "1")

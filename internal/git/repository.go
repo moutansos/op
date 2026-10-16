@@ -48,7 +48,8 @@ func (execCommandRunner) Run(ctx context.Context, command Command) ([]byte, erro
 
 // Repository performs local git operations without invoking a shell.
 type Repository struct {
-	runner CommandRunner
+	runner     CommandRunner
+	executable func(directory string) string
 }
 
 type State struct {
@@ -57,14 +58,23 @@ type State struct {
 }
 
 func NewRepository() *Repository {
-	return NewRepositoryWithRunner(execCommandRunner{})
+	return NewRepositoryWithExecutableSelector(execCommandRunner{}, defaultExecutableSelector())
 }
 
 func NewRepositoryWithRunner(runner CommandRunner) *Repository {
+	return NewRepositoryWithExecutableSelector(runner, func(string) string { return linuxGitExecutable })
+}
+
+// NewRepositoryWithExecutableSelector chooses the git executable per working
+// directory, which lets WSL use Git for Windows on Windows drives.
+func NewRepositoryWithExecutableSelector(runner CommandRunner, executable func(directory string) string) *Repository {
 	if runner == nil {
 		panic("git: nil command runner")
 	}
-	return &Repository{runner: runner}
+	if executable == nil {
+		panic("git: nil executable selector")
+	}
+	return &Repository{runner: runner, executable: executable}
 }
 
 type CloneOptions struct {
@@ -121,7 +131,7 @@ func (r *Repository) Clone(ctx context.Context, options CloneOptions) (CloneResu
 
 	output, err := r.runner.Run(ctx, Command{
 		Directory: options.ParentDirectory,
-		Name:      "git",
+		Name:      r.executable(options.ParentDirectory),
 		Args:      []string{"clone", "--", options.URL, directory},
 	})
 	if err != nil {
@@ -168,7 +178,7 @@ func (r *Repository) Init(ctx context.Context, path string) error {
 	parent, name := filepath.Dir(path), filepath.Base(path)
 	output, err := r.runner.Run(ctx, Command{
 		Directory: parent,
-		Name:      "git",
+		Name:      r.executable(parent),
 		Args:      []string{"init", "--", name},
 	})
 	if err != nil {
@@ -194,7 +204,7 @@ func (r *Repository) State(ctx context.Context, path string) (State, error) {
 	}
 	output, err := r.runner.Run(ctx, Command{
 		Directory: path,
-		Name:      "git",
+		Name:      r.executable(path),
 		Args:      statusArgs,
 	})
 	if err != nil {
@@ -226,9 +236,10 @@ func (r *Repository) Pull(ctx context.Context, path string) error {
 		return nil
 	}
 
+	git := r.executable(path)
 	output, err := r.runner.Run(ctx, Command{
 		Directory: path,
-		Name:      "git",
+		Name:      git,
 		Args:      statusArgs,
 	})
 	if err != nil {
@@ -247,7 +258,7 @@ func (r *Repository) Pull(ctx context.Context, path string) error {
 
 	output, err = r.runner.Run(ctx, Command{
 		Directory: path,
-		Name:      "git",
+		Name:      git,
 		Args:      []string{"pull", "--ff-only"},
 	})
 	if err != nil {
@@ -345,10 +356,17 @@ func (r *Repository) CreateWorktree(ctx context.Context, options WorktreeOptions
 		return WorktreeResult{}, domain.ResourceError(domain.ErrorCodeAlreadyExists, op, destination, "worktree destination already exists", nil)
 	}
 
+	git := r.executable(options.Repository)
+	target := destination
+	if git == WindowsGitExecutable {
+		// Git for Windows cannot interpret a Linux absolute path; the sibling
+		// relationship is already validated, so a relative path is equivalent.
+		target = "../" + directory
+	}
 	output, err := r.runner.Run(ctx, Command{
 		Directory: options.Repository,
-		Name:      "git",
-		Args:      []string{"worktree", "add", "-b", options.Branch, "--", destination},
+		Name:      git,
+		Args:      []string{"worktree", "add", "-b", options.Branch, "--", target},
 	})
 	if err != nil {
 		return WorktreeResult{}, commandError(ctx, op, destination, "create branch and worktree", output, err)

@@ -28,6 +28,16 @@ func (windowsHost) AbsolutePath(name string) (string, error) {
 	return filepath.Abs(name)
 }
 
+func (windowsHost) SettingsPath() (string, error) {
+	directory, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(directory, "op", "wsl.json"), nil
+}
+
+func (windowsHost) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) }
+
 func (windowsHost) WSLExecutable() (string, error) {
 	systemDirectory, err := windows.GetSystemDirectory()
 	if err != nil {

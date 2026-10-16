@@ -37,6 +37,7 @@ type rawTmuxConfig struct {
 type rawStatsConfig struct {
 	RefreshInterval     *Duration `json:"refreshInterval"`
 	TmuxRefreshInterval *Duration `json:"tmuxRefreshInterval"`
+	GitRefreshInterval  *Duration `json:"gitRefreshInterval"`
 }
 
 type rawAgentsConfig struct {
@@ -208,6 +209,9 @@ func applyStats(target *StatsConfig, raw *rawStatsConfig) {
 	if raw.TmuxRefreshInterval != nil {
 		target.TmuxRefreshInterval = *raw.TmuxRefreshInterval
 	}
+	if raw.GitRefreshInterval != nil {
+		target.GitRefreshInterval = *raw.GitRefreshInterval
+	}
 }
 
 func applyAgents(target *AgentsConfig, raw *rawAgentsConfig) {
@@ -326,7 +330,7 @@ func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	var warnings []Warning
 	collectUnknown(root, "", set("repoDirectory", "preferredShell", "tmux", "stats", "agents", "notifications", "server", "actions", "projectOpeners", "customEntries", "customCommands", "preferedShell", "wslRepoDirectory", "isServer"), &warnings)
 	collectObjectUnknown(root["tmux"], "tmux", set("session", "dashboardWindow", "socket", "shellPaneRows", "defaultProfile"), &warnings)
-	collectObjectUnknown(root["stats"], "stats", set("refreshInterval", "tmuxRefreshInterval"), &warnings)
+	collectObjectUnknown(root["stats"], "stats", set("refreshInterval", "tmuxRefreshInterval", "gitRefreshInterval"), &warnings)
 	collectObjectUnknown(root["agents"], "agents", set("enabled", "quietAfter", "idleAfter", "scanLines", "definitions"), &warnings)
 	collectAgentDefinitionUnknown(root["agents"], &warnings)
 	collectObjectUnknown(root["notifications"], "notifications", set("enabled", "debounce", "ignoreDirectories", "opencode", "opencode2", "ingest", "providers"), &warnings)

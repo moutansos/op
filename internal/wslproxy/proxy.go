@@ -16,6 +16,9 @@ const (
 	// BinaryMarker identifies this project's Linux ELF without executing it.
 	BinaryMarker = "github.com/moutansos/op:wsl-proxy-linux-elf:v1"
 	resolverName = "op-wsl-resolver"
+	// wsl.exe rejects empty arguments with E_INVALIDARG, so every argument
+	// after the resolver name carries this prefix and the resolver strips it.
+	argumentPrefix = "+"
 )
 
 var retainedBinaryMarker = BinaryMarker
@@ -50,6 +53,10 @@ type Host interface {
 	AbsolutePath(string) (string, error)
 	WSLExecutable() (string, error)
 	Execute(Invocation) (Result, error)
+	// SettingsPath locates the optional op.exe settings file; an empty path
+	// means there is none.
+	SettingsPath() (string, error)
+	ReadFile(string) ([]byte, error)
 }
 
 // Run validates and delegates args, returning a process exit code without calling os.Exit.
@@ -61,11 +68,14 @@ func Run(args []string, host Host, stderr io.Writer) int {
 		return report(stderr, 2, "%v", err)
 	}
 
-	distro, _ := host.LookupEnv("OP_WSL_DISTRO")
-	linuxOP, _ := host.LookupEnv("OP_WSL_OP")
-	if linuxOP != "" && !path.IsAbs(linuxOP) {
-		return report(stderr, 2, "OP_WSL_OP must be an absolute Linux path, got %q", linuxOP)
+	settings, warnings, err := resolveSettings(host)
+	if err != nil {
+		return report(stderr, 2, "%v", err)
 	}
+	for _, warning := range warnings {
+		fmt.Fprintf(stderr, "warning: wsl proxy: %s\n", warning)
+	}
+	distro, linuxOP := settings.Distro, settings.Op
 	wsl, err := host.WSLExecutable()
 	if err != nil {
 		return report(stderr, 7, "%v", err)
@@ -103,8 +113,8 @@ func Run(args []string, host Host, stderr io.Writer) int {
 		return report(stderr, 2, "%v", err)
 	}
 
-	commandArgs := append(wslOptions(distro), "--cd", cwd, "--exec", "/bin/sh", "-c", ResolverScript, resolverName, linuxOP)
-	commandArgs = append(commandArgs, translated...)
+	commandArgs := append(wslOptions(distro), "--cd", cwd, "--exec", "/bin/sh", "-c", ResolverScript, resolverName)
+	commandArgs = append(commandArgs, resolverArguments(linuxOP, translated)...)
 	_, err = host.Execute(Invocation{Executable: wsl, Args: commandArgs, Env: environment})
 	if err == nil {
 		return 0
@@ -114,6 +124,15 @@ func Run(args []string, host Host, stderr io.Writer) int {
 		return mapExitCode(exited.ExitCode())
 	}
 	return report(stderr, 1, "start WSL delegation: %v", err)
+}
+
+func resolverArguments(linuxOP string, args []string) []string {
+	result := make([]string, 0, len(args)+1)
+	result = append(result, argumentPrefix+linuxOP)
+	for _, argument := range args {
+		result = append(result, argumentPrefix+argument)
+	}
+	return result
 }
 
 func wslOptions(distribution string) []string {
@@ -180,7 +199,7 @@ func proxyEnvironment(environment []string) []string {
 }
 
 func normalizeWSLEnv(value string) string {
-	owned := []string{"OP_API_TOKEN", "OP_REMOTE_URL", "OP_WSL_PROXY_ACTIVE"}
+	owned := []string{"OP_API_TOKEN", "OP_REMOTE_URL", "OP_WSL_PROXY_ACTIVE", "TMUX", "TMUX_PANE"}
 	entries := make([]string, 0)
 	if value != "" {
 		for _, entry := range strings.Split(value, ":") {

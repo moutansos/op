@@ -51,6 +51,9 @@ func Validate(config Config) error {
 	if config.Stats.TmuxRefreshInterval.Duration <= 0 {
 		return invalid("stats.tmuxRefreshInterval", "must be greater than zero")
 	}
+	if config.Stats.GitRefreshInterval.Duration <= 0 {
+		return invalid("stats.gitRefreshInterval", "must be greater than zero")
+	}
 	if err := validateAgents(config.Agents); err != nil {
 		return err
 	}

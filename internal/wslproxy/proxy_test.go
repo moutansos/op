@@ -3,6 +3,7 @@ package wslproxy
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,6 +21,22 @@ type fakeHost struct {
 	results     []Result
 	errors      []error
 	calls       []Invocation
+	settings    string
+	files       map[string][]byte
+	readErr     error
+}
+
+func (host *fakeHost) SettingsPath() (string, error) { return host.settings, nil }
+
+func (host *fakeHost) ReadFile(name string) ([]byte, error) {
+	if host.readErr != nil {
+		return nil, host.readErr
+	}
+	data, found := host.files[name]
+	if !found {
+		return nil, fs.ErrNotExist
+	}
+	return data, nil
 }
 
 func (host *fakeHost) LookupEnv(name string) (string, bool) {
@@ -85,12 +102,14 @@ func TestRunPlansDelegationWithoutReencodingArguments(t *testing.T) {
 		t.Fatalf("Execute calls = %d, want 1", len(host.calls))
 	}
 	invocation := host.calls[0]
-	wantPrefix := []string{
+	wantArgs := []string{
 		"--distribution", "Ubuntu Dev; harmless",
 		"--cd", `C:\Users\Ben\source folder`,
-		"--exec", "/bin/sh", "-c", ResolverScript, resolverName, "/home/ben/bin/op",
+		"--exec", "/bin/sh", "-c", ResolverScript, resolverName, "+/home/ben/bin/op",
 	}
-	wantArgs := append(wantPrefix, arguments...)
+	for _, argument := range arguments {
+		wantArgs = append(wantArgs, "+"+argument)
+	}
 	if !reflect.DeepEqual(invocation.Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", invocation.Args, wantArgs)
 	}
@@ -100,7 +119,7 @@ func TestRunPlansDelegationWithoutReencodingArguments(t *testing.T) {
 	if strings.Contains(invocation.Executable, "attacker") {
 		t.Fatalf("mutable SystemRoot influenced executable: %q", invocation.Executable)
 	}
-	if got := environmentValue(invocation.Env, "WSLENV"); got != "EXISTING/p:OP_API_TOKEN/u:OP_REMOTE_URL/u:OP_WSL_PROXY_ACTIVE/u" {
+	if got := environmentValue(invocation.Env, "WSLENV"); got != "EXISTING/p:OP_API_TOKEN/u:OP_REMOTE_URL/u:OP_WSL_PROXY_ACTIVE/u:TMUX/u:TMUX_PANE/u" {
 		t.Fatalf("WSLENV = %q", got)
 	}
 	if got := environmentValue(invocation.Env, "OP_WSL_PROXY_ACTIVE"); got != "1" {
@@ -108,6 +127,118 @@ func TestRunPlansDelegationWithoutReencodingArguments(t *testing.T) {
 	}
 	if got := environmentValue(invocation.Env, "OP_API_TOKEN"); got != "secret" {
 		t.Fatalf("OP_API_TOKEN = %q", got)
+	}
+}
+
+const testSettingsPath = `C:\Users\Ben\AppData\Roaming\op\wsl.json`
+
+func settingsHost(lookup map[string]string, settings string) *fakeHost {
+	return &fakeHost{
+		lookup: lookup, cwd: `C:\work`, wsl: `C:\Windows\System32\wsl.exe`,
+		settings: testSettingsPath, files: map[string][]byte{testSettingsPath: []byte(settings)},
+	}
+}
+
+func TestRunUsesSettingsFileAndLetsEnvironmentOverrideIt(t *testing.T) {
+	file := `{"distro": "Ubuntu-22.04", "op": "/home/ben/.local/bin/op"}`
+	tests := []struct {
+		name       string
+		lookup     map[string]string
+		wantDistro string
+		wantOp     string
+	}{
+		{name: "file", lookup: map[string]string{}, wantDistro: "Ubuntu-22.04", wantOp: "/home/ben/.local/bin/op"},
+		{name: "empty variables", lookup: map[string]string{"OP_WSL_DISTRO": "", "OP_WSL_OP": ""}, wantDistro: "Ubuntu-22.04", wantOp: "/home/ben/.local/bin/op"},
+		{name: "variables", lookup: map[string]string{"OP_WSL_DISTRO": "Debian", "OP_WSL_OP": "/tmp/dev/op"}, wantDistro: "Debian", wantOp: "/tmp/dev/op"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			host := settingsHost(test.lookup, file)
+			var stderr bytes.Buffer
+			if code := Run([]string{"projects"}, host, &stderr); code != 0 {
+				t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+			}
+			args := host.calls[0].Args
+			if args[0] != "--distribution" || args[1] != test.wantDistro {
+				t.Fatalf("distribution args = %#v, want %q", args[:2], test.wantDistro)
+			}
+			wantTail := []string{resolverName, "+" + test.wantOp, "+projects"}
+			if got := args[len(args)-len(wantTail):]; !reflect.DeepEqual(got, wantTail) {
+				t.Fatalf("delegated tail = %#v, want %#v", got, wantTail)
+			}
+		})
+	}
+}
+
+func TestRunWithoutSettingsFileUsesDefaults(t *testing.T) {
+	host := settingsHost(map[string]string{}, "")
+	delete(host.files, testSettingsPath)
+	var stderr bytes.Buffer
+	if code := Run(nil, host, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	args := host.calls[0].Args
+	if args[0] != "--cd" || args[len(args)-1] != "+" {
+		t.Fatalf("args = %#v, want default distribution and resolver lookup", args)
+	}
+}
+
+func TestRunRejectsInvalidSettingsFile(t *testing.T) {
+	tests := map[string]string{
+		"invalid JSON":    `{"op": `,
+		"not an object":   `["op"]`,
+		"non-string":      `{"distro": 3}`,
+		"relative op":     `{"op": "bin/op"}`,
+		"Windows op path": `{"op": "C:\\op.exe"}`,
+	}
+	for name, file := range tests {
+		t.Run(name, func(t *testing.T) {
+			host := settingsHost(map[string]string{}, file)
+			var stderr bytes.Buffer
+			if code := Run(nil, host, &stderr); code != 2 {
+				t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), testSettingsPath) || len(host.calls) != 0 {
+				t.Fatalf("stderr = %q, calls = %d", stderr.String(), len(host.calls))
+			}
+		})
+	}
+	t.Run("unreadable", func(t *testing.T) {
+		host := settingsHost(map[string]string{}, "{}")
+		host.readErr = errors.New("access denied")
+		var stderr bytes.Buffer
+		if code := Run(nil, host, &stderr); code != 2 || !strings.Contains(stderr.String(), "access denied") {
+			t.Fatalf("code/stderr = %d/%q", code, stderr.String())
+		}
+	})
+}
+
+func TestRunWarnsAboutUnknownSettings(t *testing.T) {
+	host := settingsHost(map[string]string{}, `{"distribution": "Debian", "op": "/usr/bin/op"}`)
+	var stderr bytes.Buffer
+	if code := Run(nil, host, &stderr); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), `warning: wsl proxy: `+testSettingsPath+`: unknown field "distribution" is ignored`) {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestRunNeverPassesEmptyArgumentsToWSL(t *testing.T) {
+	host := &fakeHost{lookup: map[string]string{}, cwd: `C:\work`, wsl: `C:\Windows\System32\wsl.exe`}
+	var stderr bytes.Buffer
+	if code := Run([]string{"new", ""}, host, &stderr); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	args := host.calls[0].Args
+	for index, argument := range args {
+		if argument == "" {
+			t.Fatalf("argument %d is empty in %#v", index, args)
+		}
+	}
+	wantTail := []string{resolverName, "+", "+new", "+"}
+	if got := args[len(args)-len(wantTail):]; !reflect.DeepEqual(got, wantTail) {
+		t.Fatalf("delegated tail = %#v, want %#v", got, wantTail)
 	}
 }
 
@@ -135,7 +266,7 @@ func TestRunTranslatesWindowsConfigFormsAnywhereBeforeSeparator(t *testing.T) {
 		t.Fatalf("translation invocation = %#v", host.calls[0])
 	}
 	final := host.calls[1].Args
-	wantTail := []string{"projects", "--config", "/mnt/c/Users/Ben/config one.json", "--json"}
+	wantTail := []string{"+projects", "+--config", "+/mnt/c/Users/Ben/config one.json", "+--json"}
 	if !reflect.DeepEqual(final[len(final)-len(wantTail):], wantTail) {
 		t.Fatalf("delegated tail = %#v, want %#v", final[len(final)-len(wantTail):], wantTail)
 	}
@@ -154,7 +285,7 @@ func TestRunTranslatesRelativeConfigAgainstWindowsCWD(t *testing.T) {
 	if got := host.calls[0].Args[len(host.calls[0].Args)-1]; got != wantPath {
 		t.Fatalf("wslpath input = %q, want %q", got, wantPath)
 	}
-	wantConfig := "--config=/mnt/d/work/project/config.json"
+	wantConfig := "+--config=/mnt/d/work/project/config.json"
 	if got := host.calls[1].Args[len(host.calls[1].Args)-1]; got != wantConfig {
 		t.Fatalf("delegated config = %q, want %q", got, wantConfig)
 	}
@@ -211,10 +342,23 @@ func TestTranslateConfigArgs(t *testing.T) {
 }
 
 func TestNormalizeWSLEnvReplacesOwnedModifiersAndPreservesOthers(t *testing.T) {
-	input := "KEEP/p:OP_API_TOKEN/p:Other/l:op_remote_url/u:OP_WSL_PROXY_ACTIVE:KEEP_TWO/w:OP_API_TOKEN/w"
-	want := "KEEP/p:Other/l:KEEP_TWO/w:OP_API_TOKEN/u:OP_REMOTE_URL/u:OP_WSL_PROXY_ACTIVE/u"
+	input := "KEEP/p:OP_API_TOKEN/p:Other/l:op_remote_url/u:OP_WSL_PROXY_ACTIVE:KEEP_TWO/w:OP_API_TOKEN/w:TMUX:TMUX_PANE/w"
+	want := "KEEP/p:Other/l:KEEP_TWO/w:OP_API_TOKEN/u:OP_REMOTE_URL/u:OP_WSL_PROXY_ACTIVE/u:TMUX/u:TMUX_PANE/u"
 	if got := normalizeWSLEnv(input); got != want {
 		t.Fatalf("normalizeWSLEnv() = %q, want %q", got, want)
+	}
+}
+
+func TestBidirectionalWSLEnvExportsTmuxWithoutDirectionFlags(t *testing.T) {
+	tests := map[string]string{
+		"":                                "TMUX:TMUX_PANE",
+		"WT_SESSION:WT_PROFILE_ID:":       "WT_SESSION:WT_PROFILE_ID:TMUX:TMUX_PANE",
+		"KEEP/p:TMUX/u:tmux_pane/w:OTHER": "KEEP/p:OTHER:TMUX:TMUX_PANE",
+	}
+	for input, want := range tests {
+		if got := bidirectionalWSLEnv(input, tmuxVariables); got != want {
+			t.Errorf("bidirectionalWSLEnv(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

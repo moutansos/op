@@ -58,6 +58,9 @@ type TmuxConfig struct {
 type StatsConfig struct {
 	RefreshInterval     Duration `json:"refreshInterval"`
 	TmuxRefreshInterval Duration `json:"tmuxRefreshInterval"`
+	// GitRefreshInterval is how often long-running op processes re-check
+	// repository state in the background.
+	GitRefreshInterval Duration `json:"gitRefreshInterval"`
 }
 
 // AgentsConfig controls detection of interactive agents running in tmux panes.
@@ -236,6 +239,7 @@ func Defaults() Config {
 		Stats: StatsConfig{
 			RefreshInterval:     NewDuration(2 * time.Second),
 			TmuxRefreshInterval: NewDuration(5 * time.Second),
+			GitRefreshInterval:  NewDuration(60 * time.Second),
 		},
 		Agents: AgentsConfig{
 			Enabled:     true,

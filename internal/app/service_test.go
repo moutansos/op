@@ -818,6 +818,72 @@ func TestListProjectsComposesCatalogAndGitState(t *testing.T) {
 	}
 }
 
+func TestListProjectsReusesFreshGitStateBetweenCalls(t *testing.T) {
+	catalog := newFakeCatalog()
+	catalog.projects = []domain.Project{{ID: "repo", Name: "repo", Path: "/repos/repo", Kind: domain.ProjectKindRepository}}
+	repository := &fakeRepository{state: gitrepo.State{Branch: "main", Git: domain.GitStateClean}}
+	service := newTestService(t, testConfig(), dependencies(catalog, repository, &fakeLauncher{}, &fakeTmux{}, &fakeStats{}))
+	for range 3 {
+		projects, err := service.ListProjects(context.Background())
+		if err != nil || projects[0].GitState != domain.GitStateClean {
+			t.Fatalf("ListProjects() = %+v, %v", projects, err)
+		}
+	}
+	if repository.stateCalls != 1 {
+		t.Fatalf("State calls = %d, want 1", repository.stateCalls)
+	}
+}
+
+func TestListProjectsDoesNotRunGitWhileRefreshingInBackground(t *testing.T) {
+	catalog := newFakeCatalog()
+	catalog.projects = []domain.Project{{ID: "repo", Name: "repo", Path: "/repos/repo", Kind: domain.ProjectKindRepository}}
+	repository := &fakeRepository{state: gitrepo.State{Branch: "main", Git: domain.GitStateDirty}}
+	service := newTestService(t, testConfig(), dependencies(catalog, repository, &fakeLauncher{}, &fakeTmux{}, &fakeStats{}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service.RefreshGitStatusInBackground(ctx)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		projects, err := service.ListProjects(ctx)
+		if err != nil {
+			t.Fatalf("ListProjects() error = %v", err)
+		}
+		if projects[0].GitState == domain.GitStateDirty && projects[0].Branch == "main" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background refresh never populated state: %+v", projects)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	before := repository.operationCount()
+	for range 5 {
+		if _, err := service.ListProjects(ctx); err != nil {
+			t.Fatalf("ListProjects() error = %v", err)
+		}
+	}
+	if after := repository.operationCount(); after != before {
+		t.Fatalf("ListProjects() ran git while a background refresher was active: %d -> %d", before, after)
+	}
+}
+
+func TestOpenProjectRecordsObservedGitState(t *testing.T) {
+	catalog := newFakeCatalog()
+	project := domain.Project{ID: "repo", Name: "repo", Path: "/repos/repo", Kind: domain.ProjectKindRepository}
+	catalog.projects = []domain.Project{project}
+	catalog.byID[project.ID] = project
+	repository := &fakeRepository{state: gitrepo.State{Branch: "topic", Git: domain.GitStateDirty}}
+	service := newTestServiceWithOptions(t, testConfig(), dependencies(catalog, repository, &fakeLauncher{}, &fakeTmux{}, &fakeStats{}), app.Options{EnableRepositoryUpdates: true})
+	if _, err := service.OpenProject(context.Background(), domain.OpenProjectRequest{ProjectID: project.ID}); err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+	projects, err := service.ListProjects(context.Background())
+	if err != nil || projects[0].Branch != "topic" || repository.stateCalls != 1 {
+		t.Fatalf("ListProjects() = %+v, %v; state calls = %d", projects, err, repository.stateCalls)
+	}
+}
+
 func TestProductionServiceConstructsTmuxLazily(t *testing.T) {
 	cfg := testConfig()
 	cfg.RepoDirectory = t.TempDir()

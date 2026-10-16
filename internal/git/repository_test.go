@@ -425,6 +425,33 @@ func TestCreateWorktreeCreatesSiblingAndBranchInOneCommand(t *testing.T) {
 	}
 }
 
+func TestWindowsGitIsUsedWhereTheSelectorChoosesIt(t *testing.T) {
+	parent := t.TempDir()
+	repositoryPath := filepath.Join(parent, "project")
+	if err := os.MkdirAll(filepath.Join(repositoryPath, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	status := []byte("# branch.oid abc123\n# branch.head main\n# branch.upstream origin/main\n")
+	runner := &fakeRunner{responses: []commandResponse{{output: status}, {}, {}}}
+	repository := gitrepo.NewRepositoryWithExecutableSelector(runner, func(string) string { return gitrepo.WindowsGitExecutable })
+
+	if err := repository.Pull(context.Background(), repositoryPath); err != nil {
+		t.Fatalf("Pull() error = %v", err)
+	}
+	result, err := repository.CreateWorktree(context.Background(), gitrepo.WorktreeOptions{Repository: repositoryPath, Branch: "feature/x"})
+	if err != nil {
+		t.Fatalf("CreateWorktree() error = %v", err)
+	}
+	assertCommands(t, runner.commands, []gitrepo.Command{
+		{Directory: repositoryPath, Name: "git.exe", Args: []string{"--no-optional-locks", "status", "--porcelain=v2", "--branch"}},
+		{Directory: repositoryPath, Name: "git.exe", Args: []string{"pull", "--ff-only"}},
+		{Directory: repositoryPath, Name: "git.exe", Args: []string{"worktree", "add", "-b", "feature/x", "--", "../project-feature-x"}},
+	})
+	if want := filepath.Join(parent, "project-feature-x"); result.Path != want {
+		t.Fatalf("CreateWorktree() path = %q, want %q", result.Path, want)
+	}
+}
+
 func TestCreateWorktreeRejectsUnsafeInputs(t *testing.T) {
 	for _, options := range []gitrepo.WorktreeOptions{
 		{Repository: "/repos/project", Branch: "-force"},

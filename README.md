@@ -16,8 +16,8 @@ every invocation from PowerShell, cmd, or Windows Terminal delegates to a Linux 
 not run the CLI, app, TUI, Git, or tmux implementation on Windows.
 
 Using `op.exe` requires both binaries: install the Windows proxy on Windows `PATH` and install the
-Linux binary in the selected WSL distribution (normally `~/.local/bin/op`, or set `OP_WSL_OP` to its
-absolute Linux path). See [Windows-to-WSL delegation](docs/windows-wsl.md).
+Linux binary in the selected WSL distribution (normally `~/.local/bin/op`, or set `op` in
+`%APPDATA%\op\wsl.json` to its absolute Linux path). See [Windows-to-WSL delegation](docs/windows-wsl.md).
 
 ## Dependencies
 
@@ -100,10 +100,19 @@ go build -o op.exe ./cmd/op
 op.exe version
 ```
 
-`OP_WSL_DISTRO` optionally selects a distribution and `OP_WSL_OP` optionally selects an absolute
-Linux binary path. With neither set, the default distribution and its default user, `HOME`, config,
-and baseline `PATH` are used. Resolution also checks `~/.local/bin/op`, `/usr/local/bin/op`, and
-`/usr/bin/op` without loading shell profiles.
+The optional Windows settings file `%APPDATA%\op\wsl.json` selects a distribution and an absolute
+Linux binary path; the `OP_WSL_DISTRO` and `OP_WSL_OP` environment variables override it:
+
+```json
+{
+  "distro": "Ubuntu-22.04",
+  "op": "/home/ben/.local/bin/op"
+}
+```
+
+With neither set, the default distribution and its default user, `HOME`, config, and baseline
+`PATH` are used. Resolution also checks `~/.local/bin/op`, `/usr/local/bin/op`, and `/usr/bin/op`
+without loading shell profiles.
 
 ## CLI
 
@@ -213,7 +222,8 @@ The canonical file is JSON:
   },
   "stats": {
     "refreshInterval": "2s",
-    "tmuxRefreshInterval": "5s"
+    "tmuxRefreshInterval": "5s",
+    "gitRefreshInterval": "60s"
   },
   "agents": {
     "enabled": true,
@@ -560,6 +570,20 @@ cannot be inspected do not fail the whole dashboard. Host/process stats refresh 
 `stats.tmuxRefreshInterval` (5 seconds by default). The last successful snapshot remains visible and
 is marked stale if a refresh fails.
 
+### Repository State
+
+Branch and clean/dirty state come from a shared cache at `$XDG_CACHE_HOME/op/git-status.json`
+(`~/.cache/op/git-status.json` by default), so listing projects never waits on a full `git status`
+pass. Long-running processes (`op dashboard` and `op serve`) re-check every repository in the
+background every `stats.gitRefreshInterval` (60 seconds by default), four at a time. A file lock
+lets only one process run a pass; any other refresher waits and reuses its results.
+
+Commands without a background refresher, such as plain `op` and `op projects`, re-check entries
+older than two refresh intervals for at most one second and show the last known state for the rest.
+Repositories that have never been checked show no state until a refresh reaches them. Opening a
+project always inspects that repository directly before deciding whether to pull, and records the
+result in the cache.
+
 ## Server And Remote Client
 
 Create a high-entropy token file readable only by your user:
@@ -689,9 +713,14 @@ run the user service after logout, an administrator or the user (where permitted
 - **Statistics initially show `-` CPU:** process CPU is delta-based and becomes available after the
   second successful sample.
 - **Windows proxy cannot find WSL or Linux `op`:** update/install WSL, verify the selected
-  distribution, and install this project's Linux binary in a baseline/common location. If another
-  program named `op` (notably 1Password) wins resolution, set
-  `OP_WSL_OP=/absolute/linux/path/to/op`.
+  distribution, and install this project's Linux binary in a baseline/common location, or set `op`
+  in `%APPDATA%\op\wsl.json` to its absolute Linux path. Other programs named `op`, such as the
+  1Password CLI, are skipped automatically.
+- **Every `op` command takes about a second under WSL:** install `wl-clipboard` and `xclip` in the
+  distribution. See [Windows-to-WSL delegation](docs/windows-wsl.md).
+- **Git state is slow or wrong for repositories on a Windows drive:** keep `git.exe` reachable on
+  the WSL `PATH` so `op` can use Git for Windows there. See
+  [Repositories On Windows Drives](docs/windows-wsl.md#repositories-on-windows-drives).
 - **Windows `--config` fails:** Linux absolute paths pass through unchanged. Relative and absolute
   Windows paths are resolved against the Windows caller directory and converted with the selected
   distribution's `wslpath`; verify the file is accessible from that distribution.

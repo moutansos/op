@@ -20,6 +20,7 @@ var (
 
 func main() {
 	wslproxy.KeepLinuxBinaryMarker()
+	wslproxy.ExportTmuxToWindows()
 	ctx, stop := rootContext(context.Background())
 	code := cli.Run(ctx, os.Args[1:], cli.Options{
 		Version: cli.Version{Version: version, Commit: commit, Date: date},

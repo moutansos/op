@@ -167,7 +167,16 @@ func (r *runner) runDashboard(ctx context.Context, args []string) error {
 	if _, err := service.EnsureMainSession(ctx); err != nil {
 		return err
 	}
+	refreshGitStatusInBackground(ctx, service)
 	return r.runDashboardTUI(ctx, service)
+}
+
+// refreshGitStatusInBackground lets long-running commands keep repository
+// state warm so project listings never wait on git.
+func refreshGitStatusInBackground(ctx context.Context, service Service) {
+	if refresher, ok := service.(interface{ RefreshGitStatusInBackground(context.Context) }); ok {
+		refresher.RefreshGitStatusInBackground(ctx)
+	}
 }
 
 func (r *runner) runTree(ctx context.Context, args []string) error {
@@ -237,6 +246,7 @@ func (r *runner) runServe(ctx context.Context, args []string) error {
 	}
 	serveCtx, cancel := r.options.Signals(ctx)
 	defer cancel()
+	refreshGitStatusInBackground(serveCtx, service)
 	return r.serveRuntime(serveCtx, service, nil)
 }
 

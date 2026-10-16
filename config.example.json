@@ -10,7 +10,8 @@
   },
   "stats": {
     "refreshInterval": "2s",
-    "tmuxRefreshInterval": "5s"
+    "tmuxRefreshInterval": "5s",
+    "gitRefreshInterval": "60s"
   },
   "agents": {
     "enabled": true,

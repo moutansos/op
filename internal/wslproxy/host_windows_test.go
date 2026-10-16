@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+func TestWindowsHostSettingsPathIsInAppData(t *testing.T) {
+	appData := t.TempDir()
+	t.Setenv("APPDATA", appData)
+	got, err := windowsHost{}.SettingsPath()
+	if err != nil || got != filepath.Join(appData, "op", "wsl.json") {
+		t.Fatalf("SettingsPath() = %q, %v", got, err)
+	}
+}
+
 func TestWindowsHostAbsolutePathMatchesFilepathAbs(t *testing.T) {
 	tests := []string{
 		`C:\config\op.json`,

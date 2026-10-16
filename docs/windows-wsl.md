@@ -28,6 +28,22 @@ $env:GOARCH = 'amd64'
 go build -o op.exe ./cmd/op
 ```
 
+Go does not need to be installed in WSL. Both binaries can be built from Windows PowerShell, then
+the Linux one installed from WSL:
+
+```powershell
+$env:CGO_ENABLED = '0'
+$env:GOARCH = 'amd64'
+$env:GOOS = 'linux'; go build -trimpath -o .build_output/op ./cmd/op
+$env:GOOS = 'windows'; go build -trimpath -o .build_output/op.exe ./cmd/op
+wsl.exe --cd "$PWD" --exec sh -c 'install -Dm755 .build_output/op "$HOME/.local/bin/op"'
+```
+
+Install `wl-clipboard` and `xclip` in the distribution (`sudo apt install wl-clipboard xclip`).
+The terminal UI library probes `PATH` for clipboard tools when every `op` process starts. When
+none is installed, that probe walks every Windows directory WSL appends to `PATH`, which adds
+roughly a second to each invocation.
+
 The Windows proxy supports amd64 and arm64. Windows 386 is deliberately rejected because a 32-bit
 process can be redirected away from the native system directory and Sysnative handling is not
 implemented.
@@ -37,19 +53,54 @@ Linux binary's version because even help and version requests execute in WSL.
 
 ## Selection And Environment
 
-The proxy supports these optional Windows environment variables:
+`op.exe` must know which distribution and Linux binary to use before it enters WSL, so these
+settings live in a Windows-side file rather than in the Linux `config.json`. The optional file is
+`%APPDATA%\op\wsl.json`:
+
+```json
+{
+  "distro": "Ubuntu-22.04",
+  "op": "/home/ben/.local/bin/op"
+}
+```
+
+| Setting | Variable | Purpose |
+| --- | --- | --- |
+| `distro` | `OP_WSL_DISTRO` | Selects the WSL distribution passed to `wsl.exe --distribution`. The default WSL distribution is used when unset. |
+| `op` | `OP_WSL_OP` | Selects this project's Linux executable. It must be an absolute Linux path. |
+
+A non-empty environment variable overrides the matching setting, which is useful for pointing one
+shell at a development build. Both fields are optional. A missing file uses the defaults. Invalid
+JSON, a non-string value, or a relative `op` path exits with status 2 and names the file. Unknown
+fields only produce a warning.
+
+Setting `op` also skips the `PATH` search below. That search can take a noticeable fraction of a
+second when WSL appends many Windows directories to `PATH` and `op` is not on WSL's baseline
+`PATH`.
+
+The proxy also forwards these Windows environment variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `OP_WSL_DISTRO` | Selects the WSL distribution passed to `wsl.exe --distribution`. The default WSL distribution is used when unset. |
-| `OP_WSL_OP` | Selects this project's Linux executable. It must be an absolute Linux path such as `/home/ben/.local/bin/op`. |
 | `OP_API_TOKEN` | Passed into WSL by augmenting `WSLENV`. |
 | `OP_REMOTE_URL` | Passed into WSL by augmenting `WSLENV`. |
+| `TMUX`, `TMUX_PANE` | Passed into WSL by augmenting `WSLENV` so `op.exe` inside a tmux pane targets that pane. |
 
-Without `OP_WSL_OP`, a fixed non-login `/bin/sh -c` resolver checks `command -v op` using WSL's
+PowerShell example that overrides the file for one session:
+
+```powershell
+$env:OP_WSL_OP = '/home/ben/source/repos/op/.build_output/op'
+$env:OP_REMOTE_URL = 'https://op.internal.example'
+$env:OP_API_TOKEN = 'replace-me'
+op.exe projects --json
+```
+
+Without an `op` setting, a fixed non-login `/bin/sh -c` resolver checks `command -v op` using WSL's
 baseline environment, followed by `$HOME/.local/bin/op`, `/usr/local/bin/op`, and `/usr/bin/op`.
 Shell profiles such as `.profile` and `.zshrc` are never loaded, so their output cannot corrupt JSON.
-No Windows user value is interpolated into shell source.
+No Windows user value is interpolated into shell source. `wsl.exe` rejects empty arguments, so the
+proxy prefixes every argument it passes to the resolver with one character that the resolver
+removes; empty arguments such as an unset `op` setting therefore reach Linux unchanged.
 
 Candidates are never executed to determine identity. The resolver reads the executable's ELF magic
 and this project's embedded marker before the final `exec`. `.exe` paths, extensionless PE files,
@@ -58,18 +109,24 @@ utilities read only the candidate file and do not inherit stdin for a candidate 
 
 The proxy does not pass `--user`, so WSL uses the selected distribution's configured default user,
 `HOME`, config directory, and baseline environment. Unrelated `WSLENV` entries are retained exactly.
-Existing variants of `OP_API_TOKEN`, `OP_REMOTE_URL`, and `OP_WSL_PROXY_ACTIVE` are removed and clean
-`/u` (Win32-to-WSL only) entries are appended, preventing inherited `/p` or `/w` modifiers from
-changing their values or direction.
+Existing variants of `OP_API_TOKEN`, `OP_REMOTE_URL`, `OP_WSL_PROXY_ACTIVE`, `TMUX`, and `TMUX_PANE`
+are removed and clean `/u` (Win32-to-WSL only) entries are appended, preventing inherited `/p` or
+`/w` modifiers from changing their values or direction.
 
-PowerShell example:
+## Running op From Windows Shells Inside tmux
 
-```powershell
-$env:OP_WSL_DISTRO = 'Ubuntu-24.04'
-$env:OP_WSL_OP = '/home/ben/.local/bin/op'
-$env:OP_REMOTE_URL = 'https://op.internal.example'
-$env:OP_API_TOKEN = 'replace-me'
-op.exe projects --json
+Plain `op` inside a project window opens that project's action menu instead of the project picker.
+To behave the same from a Windows shell pane (for example a `pwsh.exe` preferred shell) as from a
+Linux shell pane, the Linux `op` adds `TMUX` and `TMUX_PANE` to its `WSLENV` when it runs under
+WSL. A tmux server started by `op` inherits that, so Windows programs in its panes see both
+variables, and `op.exe` forwards them back into WSL.
+
+A tmux server that was already running before `op` started it does not have that `WSLENV`. Either
+restart that server (`tmux kill-server`) so `op` starts it, or add the variables in your Linux
+shell profile:
+
+```sh
+export WSLENV="${WSLENV:+$WSLENV:}TMUX:TMUX_PANE"
 ```
 
 ## Preferred Shell
@@ -81,6 +138,22 @@ the pane command as `init` rather than `pwsh.exe`; startup verification accepts 
 The Linux dashboard TUI cannot execute inside Windows PowerShell, so a `pwsh.exe`
 preferred shell still wraps the dashboard with `sh`. Project editor wrapping and the
 bottom shell pane continue to use `pwsh.exe`.
+
+## Repositories On Windows Drives
+
+`repoDirectory` and custom entries may point at Windows drives mounted into WSL, for example
+`/mnt/d/source/repos` for a Dev Drive. `op` reads `/proc/self/mounts` to find those mounts (`9p`
+with `aname=drvfs`, or `drvfs`). When `git.exe` is reachable on the WSL `PATH` (the default
+`appendWindowsPath` behavior), status, pull, clone, init, and worktree operations below those
+mounts use Git for Windows through WSL interop. Everywhere else, and on plain Linux, Linux `git` is
+used.
+
+Linux git is a poor fit for Windows drives. Every file access crosses the WSL file-sharing layer,
+so a status check on a large repository can take minutes instead of milliseconds. It also cannot
+use the Windows credential manager, and it cannot follow worktree links written by Git for
+Windows. Git for Windows keeps those repositories exactly as Windows tools see them.
+
+Repository state is refreshed in the background and cached; see "Repository State" in the README.
 
 ## Paths And Terminal Behavior
 
