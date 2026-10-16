@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -506,25 +507,21 @@ func (s *Service) openResolved(ctx context.Context, project domain.Project, prof
 		return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeConflict, "wait for project operation", err)
 	}
 	defer release()
+	var warnings []string
 	if allowPull && s.updateRepos && repositoryUpdatesAllowed(ctx) && project.Kind != domain.ProjectKindCustomEntry {
-		state, err := s.repository.State(ctx, project.Path)
+		warning, err := s.updateBeforeOpen(ctx, op, &project)
 		if err != nil {
-			return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeInternal, "inspect project before pull", err)
+			return domain.OpenProjectResult{}, err
 		}
-		project.Branch = state.Branch
-		project.GitState = state.Git
-		s.gitStatus.Record(project.Path, state)
-		if state.Git == domain.GitStateClean {
-			if err := s.repository.Pull(ctx, project.Path); err != nil {
-				return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeInternal, "pull project", err)
-			}
+		if warning != "" {
+			warnings = append(warnings, warning)
 		}
 	}
 	if opener.Mode == domain.ProjectOpenModeGUI {
 		if err := s.launcher.LaunchProjectOpener(ctx, profile, project.Path); err != nil {
 			return domain.OpenProjectResult{}, typed(ctx, op, domain.ErrorCodeInternal, "launch GUI project opener", err)
 		}
-		return domain.OpenProjectResult{Project: project, Profile: profile, Mode: opener.Mode}, nil
+		return domain.OpenProjectResult{Project: project, Profile: profile, Mode: opener.Mode, Warnings: warnings}, nil
 	}
 	editorCommand := process.Substitute(opener.Command, project.Path, s.config.RootDirectory)
 	// Keep the session lock innermost so every path/project operation uses the
@@ -546,7 +543,34 @@ func (s *Service) openResolved(ctx context.Context, project domain.Project, prof
 	}
 	result.Profile = profile
 	result.Mode = opener.Mode
+	result.Warnings = warnings
 	return result, nil
+}
+
+// updateBeforeOpen fast-forwards a clean repository before it is opened. The
+// pull is opportunistic: a failure, such as a remote that no longer exists,
+// becomes a warning and the project still opens. Only cancellation aborts.
+func (s *Service) updateBeforeOpen(ctx context.Context, op string, project *domain.Project) (string, error) {
+	state, err := s.repository.State(ctx, project.Path)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", typed(ctx, op, domain.ErrorCodeInternal, "inspect project before pull", err)
+		}
+		return fmt.Sprintf("could not inspect %s before pulling; opened without updating: %v", project.Name, err), nil
+	}
+	project.Branch = state.Branch
+	project.GitState = state.Git
+	s.gitStatus.Record(project.Path, state)
+	if state.Git != domain.GitStateClean {
+		return "", nil
+	}
+	if err := s.repository.Pull(ctx, project.Path); err != nil {
+		if ctx.Err() != nil {
+			return "", typed(ctx, op, domain.ErrorCodeInternal, "pull project", err)
+		}
+		return fmt.Sprintf("pull failed for %s; opened without updating: %v", project.Name, err), nil
+	}
+	return "", nil
 }
 
 func (s *Service) SelectPane(ctx context.Context, request domain.SelectPaneRequest) (domain.SelectPaneResult, error) {

@@ -369,6 +369,41 @@ func TestRandomShellGUIProjectOpenDoesNotAttachTmux(t *testing.T) {
 	}
 }
 
+func TestOpenWarningsAreReportedAndProjectStillOpens(t *testing.T) {
+	warning := "pull failed for alpha; opened without updating: fatal: repository not found"
+	project := domain.Project{ID: "p1", Name: "alpha", Path: "/repos/alpha"}
+	openResult := domain.OpenProjectResult{
+		Project: project, Profile: "nvim", Mode: domain.ProjectOpenModeTmux,
+		Window: domain.TmuxWindow{ID: "@7", Name: "alpha"}, Warnings: []string{warning},
+	}
+
+	t.Run("op open", func(t *testing.T) {
+		runtime := newTestRuntime()
+		runtime.service.projects = []domain.Project{project}
+		runtime.service.openResult = openResult
+		if code := Run(context.Background(), []string{"open", "p1"}, runtime.options()); code != 0 {
+			t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+		}
+		if !strings.Contains(runtime.stderr.String(), "warning: "+warning) || !strings.Contains(runtime.stdout.String(), "Opened alpha in window alpha") {
+			t.Fatalf("stdout = %q, stderr = %q", runtime.stdout.String(), runtime.stderr.String())
+		}
+	})
+
+	t.Run("menu opener", func(t *testing.T) {
+		runtime := newTestRuntime()
+		runtime.service.projects = []domain.Project{project}
+		runtime.service.openResult = openResult
+		runtime.selectedProject = project.ID
+		runtime.selectedAction = "open-in-session:nvim"
+		if code := Run(context.Background(), nil, runtime.options()); code != 0 {
+			t.Fatalf("exit = %d, stderr = %s", code, runtime.stderr.String())
+		}
+		if !strings.Contains(runtime.stderr.String(), "warning: "+warning) || runtime.service.attachCalls != 1 {
+			t.Fatalf("stderr = %q, attach calls = %d", runtime.stderr.String(), runtime.service.attachCalls)
+		}
+	})
+}
+
 func testOpeners() []config.ProjectOpener {
 	return []config.ProjectOpener{
 		{ID: "nvim", Name: "Neovim in tmux", Mode: domain.ProjectOpenModeTmux, Command: "nvim ."},

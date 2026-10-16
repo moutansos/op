@@ -173,7 +173,9 @@ Opening an existing project selects its healthy tagged window. `--new-instance` 
 additional window. A normal local `open` fast-forward pulls a clean Git worktree before opening it
 when its current branch has an upstream. Raw folders, unborn repositories, detached HEADs, branches
 without upstreams, dirty worktrees, and custom entries open without pulling. Use `--no-repo-update`
-to suppress the pull.
+to suppress the pull. The pull is opportunistic: if it fails, for example because the remote no
+longer exists, the project still opens and the failure is reported as a warning on stderr, on the
+dashboard status line, and in the API response's `warnings`.
 
 ## Dashboard
 

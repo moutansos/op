@@ -281,14 +281,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setError("Open failed", msg.err)
 			return m, nil
 		}
-		if msg.result.Mode == domain.ProjectOpenModeGUI {
-			m.setStatus(fmt.Sprintf("Opened %s with %s", msg.result.Project.Name, msg.result.Profile))
-		} else {
+		status := fmt.Sprintf("Opened %s with %s", msg.result.Project.Name, msg.result.Profile)
+		if msg.result.Mode != domain.ProjectOpenModeGUI {
 			verb := "Opened"
 			if msg.result.Reused {
 				verb = "Selected"
 			}
-			m.setStatus(fmt.Sprintf("%s %s in window %s", verb, msg.result.Project.Name, msg.result.Window.Name))
+			status = fmt.Sprintf("%s %s in window %s", verb, msg.result.Project.Name, msg.result.Window.Name)
+		}
+		if len(msg.result.Warnings) == 0 {
+			m.setStatus(status)
+		} else {
+			warning := strings.Join(strings.Fields(strings.Join(msg.result.Warnings, "; ")), " ")
+			m.status, m.statusErr = status+"; warning: "+warning, true
 		}
 		return m, m.refreshAfterMutation(false)
 

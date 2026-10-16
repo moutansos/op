@@ -95,6 +95,9 @@ type OpenProjectResult struct {
 	Mode    ProjectOpenMode `json:"mode"`
 	Window  TmuxWindow      `json:"window,omitempty"`
 	Reused  bool            `json:"reused"`
+	// Warnings report problems that did not prevent opening, such as a
+	// failed repository pull.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type RunProjectActionResult struct {

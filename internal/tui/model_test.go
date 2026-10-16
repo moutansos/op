@@ -792,6 +792,25 @@ func TestSuccessErrorAndImmediateMutationRefresh(t *testing.T) {
 	}
 }
 
+func TestOpenWithWarningReportsOpenedAndWarningAndRefreshes(t *testing.T) {
+	model := testModel(&fakeService{})
+	model.tmuxRefreshing = false
+	model.operation = "open"
+	updated, cmd := model.Update(openFinishedMsg{result: domain.OpenProjectResult{
+		Project: domain.Project{ID: "p1", Name: "gone-remote"}, Mode: domain.ProjectOpenModeTmux,
+		Window:   domain.TmuxWindow{ID: "@3", Name: "gone-remote"},
+		Warnings: []string{"pull failed for gone-remote; opened without updating: remote: Repository not found.\nfatal: repository not found"},
+	}})
+	model = updated.(Model)
+	if model.operation != "" || cmd == nil {
+		t.Fatalf("open with warning did not finish and refresh: operation=%q cmd=%v", model.operation, cmd != nil)
+	}
+	if !model.statusErr || !strings.Contains(model.status, "Opened gone-remote in window gone-remote") ||
+		!strings.Contains(model.status, "warning: pull failed for gone-remote") || strings.Contains(model.status, "\n") {
+		t.Fatalf("status = %q, error = %v", model.status, model.statusErr)
+	}
+}
+
 func TestRefreshErrorRetainsStaleSnapshots(t *testing.T) {
 	service := &fakeService{}
 	model := testModel(service)

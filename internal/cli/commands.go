@@ -101,11 +101,18 @@ func (r *runner) openInSession(ctx context.Context, service Service, project dom
 	if err != nil {
 		return err
 	}
+	r.writeOpenWarnings(result)
 	if result.Mode == domain.ProjectOpenModeGUI {
 		fmt.Fprintf(r.options.Stdout, "Opened %s with %s.\n", result.Project.Name, result.Profile)
 		return nil
 	}
 	return service.AttachOrSwitchTo(ctx, result.Window.ID)
+}
+
+func (r *runner) writeOpenWarnings(result domain.OpenProjectResult) {
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(r.options.Stderr, "warning: %s\n", warning)
+	}
 }
 
 func (r *runner) sessionOpenerActions() []tui.Action {
@@ -592,6 +599,7 @@ func (r *runner) runOpen(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	r.writeOpenWarnings(result)
 	if result.Mode == domain.ProjectOpenModeGUI {
 		fmt.Fprintf(r.options.Stdout, "Opened %s with %s", result.Project.Name, result.Profile)
 		fmt.Fprintln(r.options.Stdout)

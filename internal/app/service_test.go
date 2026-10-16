@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -596,6 +597,76 @@ func TestOpenProjectPullPolicyAndCleanliness(t *testing.T) {
 	}
 }
 
+func TestOpenProjectOpensWithWarningWhenUpdateFails(t *testing.T) {
+	clean := gitrepo.State{Branch: "main", Git: domain.GitStateClean}
+	tests := []struct {
+		name       string
+		repository *fakeRepository
+		profile    string
+		want       string
+	}{
+		{name: "pull fails", repository: &fakeRepository{state: clean, pullErr: errors.New("fatal: repository 'https://example.com/gone.git/' not found")}, want: "pull failed for repo; opened without updating: fatal: repository 'https://example.com/gone.git/' not found"},
+		{name: "status fails", repository: &fakeRepository{stateErr: errors.New("fatal: bad object HEAD")}, want: "could not inspect repo before pulling; opened without updating: fatal: bad object HEAD"},
+		{name: "pull fails for GUI opener", repository: &fakeRepository{state: clean, pullErr: errors.New("remote gone")}, profile: "vscode", want: "pull failed for repo"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			catalog := newFakeCatalog()
+			project := domain.Project{ID: "p1", Name: "repo", Path: "/repos/repo", Kind: domain.ProjectKindRepository}
+			catalog.byID[project.ID] = project
+			cfg := testConfig()
+			cfg.ProjectOpeners = append(cfg.ProjectOpeners, config.ProjectOpener{ID: "vscode", Name: "VS Code", Mode: domain.ProjectOpenModeGUI, Command: "code {{path}}"})
+			tmux, launcher := &fakeTmux{}, &fakeLauncher{}
+			service := newTestServiceWithOptions(t, cfg, dependencies(catalog, test.repository, launcher, tmux, &fakeStats{}), app.Options{EnableRepositoryUpdates: true})
+
+			result, err := service.OpenProject(context.Background(), domain.OpenProjectRequest{ProjectID: project.ID, Profile: test.profile})
+			if err != nil {
+				t.Fatalf("OpenProject() error = %v; a failed update must not prevent opening", err)
+			}
+			if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], test.want) {
+				t.Fatalf("warnings = %q, want one containing %q", result.Warnings, test.want)
+			}
+			if test.profile == "" && len(tmux.openRequests) != 1 {
+				t.Fatalf("tmux open requests = %d, want 1", len(tmux.openRequests))
+			}
+		})
+	}
+}
+
+func TestOpenProjectCanceledDuringPullDoesNotOpen(t *testing.T) {
+	catalog := newFakeCatalog()
+	project := domain.Project{ID: "p1", Name: "repo", Path: "/repos/repo", Kind: domain.ProjectKindRepository}
+	catalog.byID[project.ID] = project
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	repository := &fakeRepository{state: gitrepo.State{Branch: "main", Git: domain.GitStateClean}, pull: func(pullCtx context.Context) error {
+		cancel()
+		return pullCtx.Err()
+	}}
+	tmux := &fakeTmux{}
+	service := newTestServiceWithOptions(t, testConfig(), dependencies(catalog, repository, &fakeLauncher{}, tmux, &fakeStats{}), app.Options{EnableRepositoryUpdates: true})
+
+	_, err := service.OpenProject(ctx, domain.OpenProjectRequest{ProjectID: project.ID})
+	if !domain.IsCode(err, domain.ErrorCodeCanceled) {
+		t.Fatalf("OpenProject() error = %v, want canceled", err)
+	}
+	if len(tmux.openRequests) != 0 {
+		t.Fatalf("canceled open still opened a window: %+v", tmux.openRequests)
+	}
+}
+
+func TestOpenProjectWithoutUpdateProblemsHasNoWarnings(t *testing.T) {
+	catalog := newFakeCatalog()
+	project := domain.Project{ID: "p1", Name: "repo", Path: "/repos/repo", Kind: domain.ProjectKindRepository}
+	catalog.byID[project.ID] = project
+	repository := &fakeRepository{state: gitrepo.State{Branch: "main", Git: domain.GitStateClean}}
+	service := newTestServiceWithOptions(t, testConfig(), dependencies(catalog, repository, &fakeLauncher{}, &fakeTmux{}, &fakeStats{}), app.Options{EnableRepositoryUpdates: true})
+	result, err := service.OpenProject(context.Background(), domain.OpenProjectRequest{ProjectID: project.ID})
+	if err != nil || len(result.Warnings) != 0 || repository.pullCalls != 1 {
+		t.Fatalf("OpenProject() = %+v, %v; pull calls = %d", result, err, repository.pullCalls)
+	}
+}
+
 func TestOpenProjectDispatchesConfiguredGUIOpenerWithoutTmux(t *testing.T) {
 	cfg := testConfig()
 	cfg.ProjectOpeners = append(cfg.ProjectOpeners, config.ProjectOpener{
@@ -1025,6 +1096,7 @@ type fakeRepository struct {
 	stateCalls      int
 	pullCalls       int
 	pullErr         error
+	pull            func(context.Context) error
 	worktreeOptions gitrepo.WorktreeOptions
 	worktreeResult  gitrepo.WorktreeResult
 	worktreeErr     error
@@ -1058,10 +1130,13 @@ func (f *fakeRepository) State(context.Context, string) (gitrepo.State, error) {
 	return f.state, f.stateErr
 }
 
-func (f *fakeRepository) Pull(context.Context, string) error {
+func (f *fakeRepository) Pull(ctx context.Context, _ string) error {
 	f.mu.Lock()
 	f.pullCalls++
 	f.mu.Unlock()
+	if f.pull != nil {
+		return f.pull(ctx)
+	}
 	return f.pullErr
 }
 
