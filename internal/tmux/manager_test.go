@@ -677,7 +677,7 @@ func TestOpenProjectWindowBuildsLayoutReusesAndCreatesInstances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenProjectWindow() error = %v", err)
 	}
-	if first.Reused || first.Window.Name != "repo-one" || len(first.Window.Panes) != 2 {
+	if first.Reused || first.Window.Name != "repo.one" || len(first.Window.Panes) != 2 {
 		t.Fatalf("first result = %+v", first)
 	}
 	window := fake.windows[first.Window.ID]
@@ -710,7 +710,7 @@ func TestOpenProjectWindowBuildsLayoutReusesAndCreatesInstances(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new instance error = %v", err)
 	}
-	if instance.Reused || instance.Window.Name != "repo-one-2" {
+	if instance.Reused || instance.Window.Name != "repo.one-2" {
 		t.Fatalf("new instance = %+v", instance)
 	}
 }
@@ -815,7 +815,7 @@ func TestOpenProjectWindowReusesOnlyMatchingProfile(t *testing.T) {
 
 func TestOpenProjectWindowUsesCollisionSafeName(t *testing.T) {
 	fake := managedFake()
-	other := fake.addWindow("other", 1, "same-name")
+	other := fake.addWindow("other", 1, "same.name")
 	fake.options[other.ID][optionProjectID] = "other-project"
 	project := domain.Project{ID: "this-project", Name: "same.name", Path: "/repos/same.name"}
 
@@ -823,7 +823,7 @@ func TestOpenProjectWindowUsesCollisionSafeName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenProjectWindow() error = %v", err)
 	}
-	if result.Window.Name == "same-name" || !strings.HasPrefix(result.Window.Name, "same-name-") {
+	if result.Window.Name == "same.name" || !strings.HasPrefix(result.Window.Name, "same.name-") {
 		t.Fatalf("collision-safe name = %q", result.Window.Name)
 	}
 }
@@ -1358,7 +1358,10 @@ func TestManagerConfigAndNameValidation(t *testing.T) {
 			t.Fatalf("validateConfig(%q) error = %v", name, err)
 		}
 	}
-	for input, want := range map[string]string{"space name": "space name", `quote'name`: `quote'name`, "repo:name": "repo-name", "repo.name": "repo-name"} {
+	for input, want := range map[string]string{
+		"space name": "space name", `quote'name`: `quote'name`, "repo:name": "repo:name",
+		"API.CRM.DynamicsCrmApi": "API.CRM.DynamicsCrmApi", "<< D:/scripts >>": "<< D:/scripts >>", `<< D:\scripts >>`: `<< D:\scripts >>`,
+	} {
 		got, err := normalizeProjectName("test", input)
 		if err != nil || got != want {
 			t.Fatalf("normalizeProjectName(%q) = %q, %v; want %q", input, got, err, want)

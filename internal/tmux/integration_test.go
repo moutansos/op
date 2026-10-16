@@ -147,6 +147,53 @@ func TestIntegrationDashboardAndProjectPaneLayout(t *testing.T) {
 	waitForPaneCommand(t, manager, dashboard.ID, "sleep")
 }
 
+func TestIntegrationProjectWindowKeepsTargetSyntaxCharactersInName(t *testing.T) {
+	if os.Getenv("OP_TMUX_INTEGRATION") != "1" {
+		t.Skip("set OP_TMUX_INTEGRATION=1 to run isolated tmux integration tests")
+	}
+	executable, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux is not installed")
+	}
+	root := t.TempDir()
+	socket := integrationSocket(t, executable)
+	raw := rawTmux{executable: executable, socket: socket}
+	manager, err := New(context.Background(), ManagerConfig{
+		Session: "code", DashboardWindow: "op", Socket: socket, StartDirectory: root,
+		DashboardCommand: "sleep 300", EditorCommand: "sleep 300", PreferredShell: "sh",
+		ShellPaneRows: 10, DefaultProfile: "integration",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := manager.EnsureMainSession(context.Background()); err != nil {
+		t.Fatalf("EnsureMainSession() error = %v", err)
+	}
+
+	for index, name := range []string{"API.CRM.DynamicsCrmApi", "<< D:/scripts >>", `<< D:\scripts >>`, "code:0.1"} {
+		path := filepath.Join(root, strconv.Itoa(index))
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		project := domain.Project{ID: "project-" + strconv.Itoa(index), Name: name, Path: path, Kind: domain.ProjectKindCustomEntry}
+		opened, err := manager.OpenProjectWindow(context.Background(), OpenProjectWindowRequest{Project: project})
+		if err != nil {
+			t.Fatalf("OpenProjectWindow(%q) error = %v", name, err)
+		}
+		if opened.Window.Name != name {
+			t.Fatalf("window name = %q, want %q", opened.Window.Name, name)
+		}
+		actual, err := raw.run(context.Background(), "display-message", "-p", "-t", opened.Window.ID, "#{window_name}")
+		if err != nil || strings.TrimRight(actual, "\n") != name {
+			t.Fatalf("tmux window name = %q, %v; want %q", actual, err, name)
+		}
+		reused, err := manager.OpenProjectWindow(context.Background(), OpenProjectWindowRequest{Project: project})
+		if err != nil || !reused.Reused || reused.Window.ID != opened.Window.ID {
+			t.Fatalf("reuse of %q = %+v, error = %v", name, reused, err)
+		}
+	}
+}
+
 func TestIntegrationAdoptsWrappedLegacyDashboardPane(t *testing.T) {
 	requireTmuxIntegration(t)
 	executable, err := exec.LookPath("tmux")

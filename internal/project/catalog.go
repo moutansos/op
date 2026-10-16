@@ -41,7 +41,7 @@ func NewCatalog(cfg config.Config) (*Catalog, error) {
 	entries := append([]config.CustomEntry(nil), cfg.CustomEntries...)
 	for i, entry := range entries {
 		field := fmt.Sprintf("customEntries[%d]", i)
-		if err := validateName(entry.Name); err != nil {
+		if err := validateEntryName(entry.Name); err != nil {
 			return nil, domain.FieldError(domain.ErrorCodeConfig, op, field+".name", err.Error())
 		}
 		if err := validateAbsoluteCleanPath(entry.Paths.Linux); err != nil {
@@ -277,6 +277,15 @@ func validateName(name string) error {
 		return err
 	}
 	return nil
+}
+
+// validateEntryName checks a custom entry name. Unlike discovered names it is
+// only a label and never becomes a path component, so separators are allowed.
+func validateEntryName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("must not be empty")
+	}
+	return validateGotmuxSafe(name)
 }
 
 func validateGotmuxSafe(value string) error {

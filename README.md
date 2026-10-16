@@ -534,7 +534,10 @@ After migration, rename old fields to the canonical spellings and remove ignored
   serialized transaction.
 
 Project/session/window names and paths containing control characters or gotmux's `-:-` query
-separator are rejected. Session and dashboard names also cannot contain `:` or `.`.
+separator are rejected. Session and dashboard names also cannot contain `:` or `.`. Project windows
+are always targeted by ID, so they are named exactly after the project, including any `.`, `:`, `/`,
+or `\`. Custom entry names are labels rather than directory names and may contain those characters
+too, for example `<< D:/scripts >>`.
 
 Existing tmux sessions, windows, and pane paths are read by canonical ID and then by one field per
 query. They may contain `-:-`, tabs, spaces, or other delimiter-like text without entering gotmux's

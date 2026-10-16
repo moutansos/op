@@ -42,7 +42,9 @@ func normalizeProjectName(op, name string) (string, error) {
 		return "", domain.FieldError(domain.ErrorCodeInvalidArgument, op, "project.name", "must not contain controls or gotmux's '-:-' separator")
 	}
 
-	name = strings.NewReplacer(":", "-", ".", "-").Replace(name)
+	// Windows are always targeted by ID, so the project name is only a label
+	// and keeps characters such as '.', ':', and '/' that tmux target syntax
+	// would otherwise interpret.
 	name = strings.Trim(name, " -")
 	if name == "" {
 		return "", domain.FieldError(domain.ErrorCodeInvalidArgument, op, "project.name", "has no usable tmux window characters")

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -344,6 +346,35 @@ func TestNewCatalogRejectsGotmuxDangerousNamesAndPaths(t *testing.T) {
 				t.Fatalf("NewCatalog() error = %v, want config", err)
 			}
 		})
+	}
+}
+
+func TestCustomEntryNamesAreLabelsThatMayContainSeparators(t *testing.T) {
+	root := t.TempDir()
+	names := []string{"<< D:/scripts >>", `<< D:\scripts >>`, "API.CRM.Config", "..", "nvim/config"}
+	entries := make([]config.CustomEntry, len(names))
+	for index, name := range names {
+		entries[index] = config.CustomEntry{Name: name, Paths: config.EntryPaths{Linux: filepath.Join(root, "custom", strconv.Itoa(index))}}
+	}
+	projects, err := newTestCatalog(t, root, entries).List(context.Background())
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	got := make([]string, len(projects))
+	for index, project := range projects {
+		got[index] = project.Name
+	}
+	slices.Sort(got)
+	want := slices.Clone(names)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("custom entry names = %v, want %v", got, want)
+	}
+	for _, name := range []string{"", "   ", "bad-:-name", "bad\nname"} {
+		_, err := NewCatalog(config.Config{RepoDirectory: root, CustomEntries: []config.CustomEntry{{Name: name, Paths: config.EntryPaths{Linux: filepath.Join(root, "custom")}}}})
+		if !domain.IsCode(err, domain.ErrorCodeConfig) {
+			t.Fatalf("NewCatalog(name %q) error = %v, want config", name, err)
+		}
 	}
 }
 
