@@ -186,10 +186,96 @@ func selectProjectForTest(t *testing.T, model *Model, projectID string) {
 	for index, item := range model.projects.VisibleItems() {
 		if item.(projectItem).project.ID == projectID {
 			model.projects.Select(index)
+			model.projectFilterSelection = model.projects.FilterValue()
 			return
 		}
 	}
 	t.Fatalf("project %q is not visible", projectID)
+}
+
+func typeProjectFilter(model Model, text string, deliver bool) Model {
+	for _, r := range text {
+		var cmd tea.Cmd
+		key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		if r == '\b' {
+			key = tea.KeyMsg{Type: tea.KeyBackspace}
+		}
+		model, cmd = updateTestModelWithCmd(model, key)
+		if deliver {
+			model = deliverProjectFilterResults(model, cmd)
+		}
+	}
+	return model
+}
+
+// deliverProjectFilterResults delivers only filter results, skipping the
+// cursor blink timers that the filter input also schedules.
+func deliverProjectFilterResults(model Model, cmd tea.Cmd) Model {
+	if cmd == nil {
+		return model
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, command := range msg {
+			model = deliverProjectFilterResults(model, command)
+		}
+	case projectFilterMatchesMsg:
+		model = updateTestModel(model, msg)
+	}
+	return model
+}
+
+func TestProjectFilterSelectsBestMatchWhenTextChanges(t *testing.T) {
+	model := loadProjectsForTest(testModel(&fakeService{}),
+		domain.Project{ID: "one", Name: "api-one", Path: "/repos/one"},
+		domain.Project{ID: "two", Name: "api-two", Path: "/repos/two"},
+		domain.Project{ID: "three", Name: "api-three", Path: "/repos/three"},
+	)
+	model = updateTestModel(model, tea.FocusMsg{})
+	model = typeProjectFilter(model, "api", true)
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyCtrlN})
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if got := model.selectedProjectID(); got != "three" {
+		t.Fatalf("selected project after moving down = %q, want three", got)
+	}
+
+	model = typeProjectFilter(model, "t", true)
+	visible := visibleProjectIDs(model)
+	if !slices.Equal(visible, []string{"two", "three"}) {
+		t.Fatalf("visible projects for apit = %v, want [two three]", visible)
+	}
+	if got := model.selectedProjectID(); got != "two" {
+		t.Fatalf("selected project after typing = %q, want best match two", got)
+	}
+
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyCtrlN})
+	model = typeProjectFilter(model, "\b", true)
+	if got, best := model.selectedProjectID(), visibleProjectIDs(model)[0]; got != best {
+		t.Fatalf("selected project after backspace = %q, want best match %q", got, best)
+	}
+}
+
+func TestEnterRightAfterTypingOpensBestMatch(t *testing.T) {
+	service := &fakeService{}
+	model := loadProjectsForTest(testModel(service),
+		domain.Project{ID: "one", Name: "api-one", Path: "/repos/one"},
+		domain.Project{ID: "two", Name: "api-two", Path: "/repos/two"},
+		domain.Project{ID: "three", Name: "api-three", Path: "/repos/three"},
+	)
+	model = updateTestModel(model, tea.FocusMsg{})
+	model = typeProjectFilter(model, "api", true)
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyCtrlN})
+	model = updateTestModel(model, tea.KeyMsg{Type: tea.KeyCtrlN})
+	model = typeProjectFilter(model, "t", false)
+
+	model, cmd := updateTestModelWithCmd(model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter did not schedule an open")
+	}
+	cmd()
+	if service.openReq.ProjectID != "two" {
+		t.Fatalf("opened project = %q, want best match two", service.openReq.ProjectID)
+	}
 }
 
 func visibleProjectIDs(model Model) []string {
@@ -604,8 +690,8 @@ func TestRapidFilteredRefreshAndFilterResultsKeepLatestProjects(t *testing.T) {
 	if got := visibleProjectIDs(model); !sameProjectIDs(got, []string{"latest", "two"}) {
 		t.Fatalf("latest filtered projects = %v, want [latest two]", got)
 	}
-	if got := model.selectedProjectID(); got != "two" {
-		t.Fatalf("selection after rapid filter results = %q, want two", got)
+	if got, best := model.selectedProjectID(), visibleProjectIDs(model)[0]; got != best {
+		t.Fatalf("selection after typing during a refresh = %q, want best match %q", got, best)
 	}
 }
 

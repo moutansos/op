@@ -75,6 +75,9 @@ type Model struct {
 	projectSelectionID          string
 	projectSelectionRequired    bool
 	projectSelectionUnavailable bool
+	// projectFilterSelection is the filter text the current selection was
+	// chosen for. Filter results for any other text select the best match.
+	projectFilterSelection string
 
 	tmux             domain.TmuxSnapshot
 	haveTmux         bool
@@ -149,6 +152,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.projects.SetFilterState(list.Filtering)
 		m.selectProjectByID(selectedID)
+		m.projectFilterSelection = m.projects.FilterValue()
 		return m, textinput.Blink
 
 	case projectsLoadedMsg:
@@ -189,6 +193,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.projects, _ = m.projects.Update(msg.matches)
+		if m.projects.FilterValue() != m.projectFilterSelection {
+			m.selectBestProjectMatch()
+			return m, nil
+		}
 		if m.projectRefiltering {
 			m.finishProjectSelection(m.projectSelectionID, m.projectSelectionRequired)
 			m.projectRefiltering = false
@@ -341,9 +349,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if key.String() == "enter" {
 			selectedID := m.selectedProjectID()
+			textChanged := m.projects.FilterValue() != m.projectFilterSelection
 			m.projectFilterGeneration++
 			m.projects.SetFilterText(m.projects.FilterValue())
-			m.selectProjectByID(selectedID)
+			if textChanged {
+				m.selectBestProjectMatch()
+			} else {
+				m.selectProjectByID(selectedID)
+			}
 			return m.startOpen()
 		}
 		return m.updateProjects(key)
@@ -443,6 +456,7 @@ func (m *Model) handleProjectFilterNavigation(key tea.KeyMsg) bool {
 		return false
 	}
 	m.projectSelectionUnavailable = false
+	m.projectFilterSelection = m.projects.FilterValue()
 	return true
 }
 
@@ -680,7 +694,17 @@ func (m Model) projectSelection() (string, bool) {
 	return project.ID, true
 }
 
+func (m *Model) selectBestProjectMatch() {
+	m.projectFilterSelection = m.projects.FilterValue()
+	m.projectRefiltering = false
+	m.projectSelectionID = ""
+	m.projectSelectionRequired = false
+	m.projectSelectionUnavailable = false
+	m.projects.ResetSelected()
+}
+
 func (m *Model) finishProjectSelection(projectID string, required bool) {
+	m.projectFilterSelection = m.projects.FilterValue()
 	m.projectSelectionID = ""
 	m.projectSelectionRequired = false
 	if !required {
@@ -723,8 +747,12 @@ func (m Model) updateProjects(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishProjectSelection(m.projectSelectionID, m.projectSelectionRequired)
 		m.projectRefiltering = false
 	}
+	if m.projects.FilterState() == list.Unfiltered {
+		m.projectFilterSelection = ""
+	}
 	if key, ok := msg.(tea.KeyMsg); ok && filterState != list.Filtering && m.projectNavigationKey(key) && len(m.projects.VisibleItems()) > 0 {
 		m.projectSelectionUnavailable = false
+		m.projectFilterSelection = m.projects.FilterValue()
 	}
 	return m, wrapProjectListCmd(cmd, m.projectFilterGeneration)
 }
