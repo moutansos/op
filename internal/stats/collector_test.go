@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +67,54 @@ func TestCollectorAggregatesProcessTreeAndCPUDeltas(t *testing.T) {
 	assertSingleProcess(t, second, want)
 	if grandchild.timesCalls != 2 {
 		t.Fatalf("shared descendant Times() calls = %d, want 2", grandchild.timesCalls)
+	}
+}
+
+type fakeWindowsSource struct{ sample windowsHostSample }
+
+func (f fakeWindowsSource) Sample(context.Context) windowsHostSample { return f.sample }
+
+func TestCollectorAttachesWindowsProcessesFromTheSameServerAndPane(t *testing.T) {
+	started := time.Unix(1_700_000_000, 0)
+	server := fakeProcess(50, started, 5, 0)
+	shellPane := fakeProcess(100, started, 10, 0)
+	otherPane := fakeProcess(200, started, 10, 0)
+	server.children = []*fakeProcessMetrics{shellPane, otherPane}
+	clock := &fakeClock{times: []time.Time{started.Add(10 * time.Second)}}
+	collector := newCollector(fakeHostMetrics{}, fakeProcessFactory{processes: map[int32]*fakeProcessMetrics{50: server}}, clock.Now, 20)
+	collector.windows = fakeWindowsSource{sample: windowsHostSample{
+		Stats: domain.WindowsHostStats{Ready: true},
+		Processes: []windowsProcess{
+			{PID: 7000, ParentPID: 1, Created: 1, Name: "pwsh.exe", Pane: "%1", ServerPID: 50, WorkingSet: 1000, CPUPercent: 2, CPUAvailable: true},
+			{PID: 7001, ParentPID: 7000, Created: 2, Name: "opencode.exe", Pane: "%1", ServerPID: 50, WorkingSet: 4000, CPUPercent: 10, CPUAvailable: true},
+			// Same pane ID on a different tmux server, e.g. a second tmux socket.
+			{PID: 8000, ParentPID: 1, Created: 1, Name: "other.exe", Pane: "%1", ServerPID: 999, WorkingSet: 99999},
+		},
+	}}
+
+	snapshot, err := collector.Collect(context.Background(), tmuxSnapshot(
+		domain.TmuxPane{ID: "%1", PID: 100, CurrentCommand: "pwsh.exe"},
+		domain.TmuxPane{ID: "%2", PID: 200, CurrentCommand: "zsh"},
+	))
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if snapshot.WindowsHost == nil || !snapshot.WindowsHost.Ready {
+		t.Fatalf("WindowsHost = %+v", snapshot.WindowsHost)
+	}
+	pane := snapshot.Processes[0]
+	want := []domain.WindowsProcessStats{
+		{PID: 7000, ParentPID: 1, Name: "pwsh.exe", Depth: 0, CPUPercent: 2, CPUAvailable: true, WorkingSetBytes: 1000},
+		{PID: 7001, ParentPID: 7000, Name: "opencode.exe", Depth: 1, CPUPercent: 10, CPUAvailable: true, WorkingSetBytes: 4000},
+	}
+	if !reflect.DeepEqual(pane.WindowsProcesses, want) {
+		t.Fatalf("pane Windows processes = %+v", pane.WindowsProcesses)
+	}
+	if pane.ResidentBytes != 10+5000 || pane.CPUPercent != 12 || !pane.CPUAvailable || pane.ProcessCount != 3 {
+		t.Fatalf("pane totals = %+v", pane)
+	}
+	if other := snapshot.Processes[1]; len(other.WindowsProcesses) != 0 || other.ResidentBytes != 10 {
+		t.Fatalf("other pane = %+v", other)
 	}
 }
 
@@ -458,6 +507,17 @@ func (f fakeProcessSnapshot) Open(pid int32) (processMetrics, error) {
 	return proc, nil
 }
 
+func (f fakeProcessSnapshot) Parent(pid int32) (int32, bool) {
+	for _, proc := range f.processes {
+		for _, child := range proc.children {
+			if child.pid == pid {
+				return proc.pid, true
+			}
+		}
+	}
+	return 0, false
+}
+
 func (f fakeProcessSnapshot) Children(pid int32) []processMetrics {
 	proc, ok := f.processes[pid]
 	if !ok {
@@ -527,7 +587,7 @@ func assertSingleProcess(t *testing.T, snapshot domain.StatsSnapshot, want domai
 	if len(snapshot.Processes) != 1 {
 		t.Fatalf("len(Processes) = %d, want 1", len(snapshot.Processes))
 	}
-	if snapshot.Processes[0] != want {
+	if !reflect.DeepEqual(snapshot.Processes[0], want) {
 		t.Fatalf("Processes[0] = %#v, want %#v", snapshot.Processes[0], want)
 	}
 }

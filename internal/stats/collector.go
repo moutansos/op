@@ -29,6 +29,9 @@ type processFactory interface {
 type processSnapshot interface {
 	Open(int32) (processMetrics, error)
 	Children(int32) []processMetrics
+	// Parent reports a process's parent PID; for a pane's root process that
+	// is the tmux server.
+	Parent(int32) (int32, bool)
 }
 
 type processMetrics interface {
@@ -131,12 +134,23 @@ func (c *Collector) Collect(ctx context.Context, tmux domain.TmuxSnapshot) (doma
 		elapsed = 0
 	}
 
+	var windowsHost *domain.WindowsHostStats
+	var windowsProcesses map[windowsPaneKey][]windowsProcess
+	if c.windows != nil {
+		sample := c.windows.Sample(ctx)
+		windowsHost = &sample.Stats
+		windowsProcesses = groupWindowsProcesses(sample.Processes)
+	}
+
 	if tmux.Session != nil {
 		for _, window := range tmux.Session.Windows {
 			for _, pane := range window.Panes {
 				stats, foreground, err := c.collectPane(ctx, processTable, capturedAt, elapsed, window.Name, pane, currentCPU)
 				if err != nil {
 					return domain.StatsSnapshot{}, err
+				}
+				if server, ok := processTable.Parent(pane.PID); ok && !pane.Dead {
+					attachWindowsProcesses(&stats, windowsProcesses[windowsPaneKey{server: server, pane: pane.ID}])
 				}
 				processes = append(processes, stats)
 				foregrounds[pane.ID] = foreground
@@ -152,11 +166,6 @@ func (c *Collector) Collect(ctx context.Context, tmux domain.TmuxSnapshot) (doma
 		agentsError = "agent detection is disabled or unavailable"
 	}
 	agentStates := c.collectAgents(ctx, capturedAt, tmux, foregrounds)
-	var windowsHost *domain.WindowsHostStats
-	if c.windows != nil {
-		sample := c.windows.Sample(ctx)
-		windowsHost = &sample
-	}
 	if err := ctx.Err(); err != nil {
 		return domain.StatsSnapshot{}, err
 	}
@@ -366,6 +375,37 @@ func (c *Collector) collectPane(
 	return stats, foreground, nil
 }
 
+type windowsPaneKey struct {
+	server int32
+	pane   string
+}
+
+func groupWindowsProcesses(processes []windowsProcess) map[windowsPaneKey][]windowsProcess {
+	grouped := make(map[windowsPaneKey][]windowsProcess)
+	for _, process := range processes {
+		key := windowsPaneKey{server: process.ServerPID, pane: process.Pane}
+		grouped[key] = append(grouped[key], process)
+	}
+	return grouped
+}
+
+// attachWindowsProcesses adds a pane's Windows programs to its tree and
+// totals. Linux sees each of them only as a small interop stub.
+func attachWindowsProcesses(stats *domain.PaneProcessStats, processes []windowsProcess) {
+	if len(processes) == 0 {
+		return
+	}
+	stats.WindowsProcesses = windowsProcessTree(processes)
+	for _, process := range stats.WindowsProcesses {
+		stats.ResidentBytes += process.WorkingSetBytes
+		if process.CPUAvailable {
+			stats.CPUPercent += process.CPUPercent
+			stats.CPUAvailable = true
+		}
+	}
+	stats.ProcessCount += len(stats.WindowsProcesses)
+}
+
 type unavailableProcessSnapshot struct {
 	err error
 }
@@ -376,6 +416,10 @@ func (s unavailableProcessSnapshot) Open(int32) (processMetrics, error) {
 
 func (unavailableProcessSnapshot) Children(int32) []processMetrics {
 	return nil
+}
+
+func (unavailableProcessSnapshot) Parent(int32) (int32, bool) {
+	return 0, false
 }
 
 func paneCount(snapshot domain.TmuxSnapshot) int {

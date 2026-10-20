@@ -1131,6 +1131,59 @@ func TestStatsPanelComparesWindowsHostAndWSL(t *testing.T) {
 	}
 }
 
+func TestStatsPanelShowsWindowsProcessTreeUnderItsPane(t *testing.T) {
+	children := []domain.WindowsProcessStats{
+		{PID: 20352, Name: "pwsh.exe", Depth: 0, CPUPercent: 0.4, CPUAvailable: true, WorkingSetBytes: 24 << 20, UptimeSeconds: 3600},
+		{PID: 32348, Name: "opencode.exe", Depth: 1, WorkingSetBytes: 1 << 20, UptimeSeconds: 3500},
+		{PID: 30912, Name: "opencode.exe", Depth: 2, CPUPercent: 12.5, CPUAvailable: true, WorkingSetBytes: 206 << 20, UptimeSeconds: 3500},
+	}
+	browser := make([]domain.WindowsProcessStats, 9)
+	for index := range browser {
+		browser[index] = domain.WindowsProcessStats{PID: uint32(6720 + index), Name: "firefox.exe", Depth: min(index, 1)}
+	}
+	model := testModel(&fakeService{})
+	model.haveStats = true
+	model.stats = domain.StatsSnapshot{Processes: []domain.PaneProcessStats{
+		{WindowName: "agent", PaneID: "%14", RootPID: 1001, Command: "pwsh.exe", CPUAvailable: true, CPUPercent: 12.9, ResidentBytes: 231 << 20, WindowsProcesses: children},
+		{WindowName: "web", PaneID: "%1", RootPID: 1002, Command: "pwsh.exe", WindowsProcesses: browser},
+		{WindowName: "linux", PaneID: "%2", RootPID: 1003, Command: "zsh"},
+	}}
+
+	wide := strings.Split(ansi.Strip(model.renderStats(100, 60)), "\n")
+	find := func(lines []string, text string) int {
+		for index, line := range lines {
+			if strings.Contains(line, text) {
+				return index
+			}
+		}
+		t.Fatalf("no line contains %q:\n%s", text, strings.Join(lines, "\n"))
+		return -1
+	}
+	agent := find(wide, "agent")
+	if !strings.Contains(wide[agent+1], "20352") || !strings.Contains(wide[agent+1], "└ pwsh.exe") || !strings.Contains(wide[agent+1], "0.4%") {
+		t.Errorf("first Windows row = %q", wide[agent+1])
+	}
+	if !strings.Contains(wide[agent+2], " └ opencode.exe") || !strings.Contains(wide[agent+2], "-") {
+		t.Errorf("nested Windows row without CPU yet = %q", wide[agent+2])
+	}
+	if !strings.Contains(wide[agent+3], "  └ opencode.exe") || !strings.Contains(wide[agent+3], "12.5%") || !strings.Contains(wide[agent+3], "206.0MiB") {
+		t.Errorf("deepest Windows row = %q", wide[agent+3])
+	}
+	web := find(wide, "web")
+	if more := wide[web+1+maxWindowsRowsPerPane]; !strings.Contains(more, "… 3 more Windows processes") {
+		t.Errorf("row after the cap = %q", more)
+	}
+	if linux := find(wide, "linux"); linux != web+maxWindowsRowsPerPane+2 {
+		t.Errorf("Linux-only pane is at row %d, want directly after the capped Windows rows", linux)
+	}
+
+	narrow := strings.Split(ansi.Strip(model.renderStats(60, 60)), "\n")
+	row := narrow[find(narrow, "agent %14")+2]
+	if !strings.Contains(row, "└ pwsh.exe 20352") || !strings.Contains(row, "CPU 0.4%") || !strings.Contains(row, "WS 24.0MiB") {
+		t.Errorf("narrow Windows row = %q", row)
+	}
+}
+
 func TestDashboardFitsTerminalWithLongRows(t *testing.T) {
 	projects := make([]domain.Project, 0, 60)
 	for index := range 60 {

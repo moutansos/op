@@ -583,8 +583,18 @@ used/total memory, and uptime, plus the logical CPU count for Windows and the lo
 Windows figures come from one long-lived `powershell.exe` started through WSL interop that reads
 system counters directly; it adds a few milliseconds per refresh and exits with the dashboard. If it
 cannot start, the Windows row shows why and retries every 30 seconds; the WSL row is unaffected.
-`GET /v1/stats` returns the same data as `windowsHost`. The process list still covers Linux
-processes only, so Windows programs started from a pane appear as WSL's small interop stub.
+`GET /v1/stats` returns the same data as `windowsHost`.
+
+Windows programs started from a pane, such as `pwsh.exe`, `opencode.exe`, or Windows `nvim`, appear
+only as a small interop stub on the Linux side. Under WSL the sampler also finds every Windows
+process whose environment carries `TMUX` and `TMUX_PANE`, which Windows programs inherit when those
+variables are forwarded through `WSLENV` (see [Windows-to-WSL delegation](docs/windows-wsl.md)), and
+matches it to its pane by tmux server and pane ID. Each pane then lists its Windows processes as an
+indented tree below its own row, at most six per pane, and its CPU, memory, and process count
+include them. Windows process memory is the working set; CPU is a share of one logical CPU, like
+Linux processes. Each process's environment is read once, when it is first seen, so a refresh costs
+about 10 milliseconds. The dashboard's own sampler appears under the pane running the dashboard.
+`GET /v1/stats` returns the trees as `windowsProcesses` on each pane.
 
 The first process sample shows CPU as unavailable until a delta exists. Processes that exit or
 cannot be inspected do not fail the whole dashboard. Host/process stats refresh at

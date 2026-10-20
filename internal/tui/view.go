@@ -276,6 +276,10 @@ func (m Model) renderStats(width, height int) string {
 				truncate(process.Command, 16), formatProcessCPU(process), formatBytes(process.ResidentBytes),
 				formatDuration(process.UptimeSeconds), state)
 			lines = append(lines, truncate(line, width))
+			lines = append(lines, windowsProcessLines(process.WindowsProcesses, width, 30, func(child domain.WindowsProcessStats, label string) string {
+				return fmt.Sprintf("%-14s %-7s %6d %-16s %6s %8s %8s", "", "", child.PID, truncate(label, 16),
+					formatWindowsCPU(child), formatBytes(child.WorkingSetBytes), formatDuration(child.UptimeSeconds))
+			})...)
 		}
 	} else {
 		for _, process := range m.stats.Processes {
@@ -286,9 +290,39 @@ func (m Model) renderStats(width, height int) string {
 			lines = append(lines, truncate(fmt.Sprintf("%s %s  pid %d  %s", process.WindowName, process.PaneID, process.RootPID, state), width))
 			detail := fmt.Sprintf("  %s  CPU %s  RSS %s  up %s", process.Command, formatProcessCPU(process), formatBytes(process.ResidentBytes), formatDuration(process.UptimeSeconds))
 			lines = append(lines, dimStyle.Render(truncate(detail, width)))
+			lines = append(lines, windowsProcessLines(process.WindowsProcesses, width, 2, func(child domain.WindowsProcessStats, label string) string {
+				return fmt.Sprintf("  %s %d  CPU %s  WS %s", label, child.PID, formatWindowsCPU(child), formatBytes(child.WorkingSetBytes))
+			})...)
 		}
 	}
 	return limitLines(lines, height)
+}
+
+// maxWindowsRowsPerPane keeps one pane with a large Windows tree, such as a
+// browser, from pushing every other pane out of the panel.
+const maxWindowsRowsPerPane = 6
+
+// windowsProcessLines renders a pane's Windows processes as an indented tree
+// below the pane's own row.
+func windowsProcessLines(processes []domain.WindowsProcessStats, width, indent int, format func(domain.WindowsProcessStats, string) string) []string {
+	lines := make([]string, 0, min(len(processes), maxWindowsRowsPerPane+1))
+	for index, process := range processes {
+		if index == maxWindowsRowsPerPane {
+			more := fmt.Sprintf("%s… %d more Windows processes", strings.Repeat(" ", indent), len(processes)-index)
+			lines = append(lines, dimStyle.Render(truncate(more, width)))
+			break
+		}
+		label := strings.Repeat(" ", min(process.Depth, 3)) + "└ " + process.Name
+		lines = append(lines, dimStyle.Render(truncate(format(process, label), width)))
+	}
+	return lines
+}
+
+func formatWindowsCPU(process domain.WindowsProcessStats) string {
+	if !process.CPUAvailable {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f%%", process.CPUPercent)
 }
 
 // hostComparisonLines shows the Windows machine and the WSL virtual machine

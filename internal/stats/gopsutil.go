@@ -54,6 +54,7 @@ func (gopsutilProcessFactory) Snapshot(ctx context.Context) (processSnapshot, er
 	result := &gopsutilProcessSnapshot{
 		processes: make(map[int32]processMetrics, len(processes)),
 		children:  make(map[int32][]processMetrics),
+		parents:   make(map[int32]int32, len(processes)),
 	}
 	for _, proc := range processes {
 		if err := ctx.Err(); err != nil {
@@ -64,6 +65,7 @@ func (gopsutilProcessFactory) Snapshot(ctx context.Context) (processSnapshot, er
 		parentPID, err := proc.PpidWithContext(ctx)
 		if err == nil {
 			result.children[parentPID] = append(result.children[parentPID], metric)
+			result.parents[proc.Pid] = parentPID
 		} else if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
@@ -79,6 +81,12 @@ func (gopsutilProcessFactory) Snapshot(ctx context.Context) (processSnapshot, er
 type gopsutilProcessSnapshot struct {
 	processes map[int32]processMetrics
 	children  map[int32][]processMetrics
+	parents   map[int32]int32
+}
+
+func (s *gopsutilProcessSnapshot) Parent(pid int32) (int32, bool) {
+	parent, ok := s.parents[pid]
+	return parent, ok
 }
 
 func (s *gopsutilProcessSnapshot) Open(pid int32) (processMetrics, error) {

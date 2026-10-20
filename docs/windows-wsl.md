@@ -163,6 +163,11 @@ so the two memory figures can differ widely. Windows figures are read by a `powe
 started through interop; `powershell.exe` must be reachable on the WSL `PATH` or under
 `/mnt/<drive>/Windows/System32`. See "Statistics" in the README.
 
+The process list also shows Windows programs started from each pane, found through the `TMUX` and
+`TMUX_PANE` variables they inherit. Panes of a tmux server started without those variables in
+`WSLENV` show only the Linux interop stub; see "Running op From Windows Shells Inside tmux" above.
+Programs running as administrator cannot be inspected and are left out.
+
 ## Paths And Terminal Behavior
 
 The current Windows working directory is supplied with WSL's documented `--cd` option. This keeps

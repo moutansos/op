@@ -282,6 +282,23 @@ type PaneProcessStats struct {
 	// necessarily a direct child of the pane's root shell.
 	ForegroundPID     int32  `json:"foregroundPid,omitempty"`
 	ForegroundCommand string `json:"foregroundCommand,omitempty"`
+	// WindowsProcesses are Windows programs started from the pane under WSL,
+	// in tree order. They are included in CPUPercent, ResidentBytes, and
+	// ProcessCount, because Linux only sees a small interop stub for each.
+	WindowsProcesses []WindowsProcessStats `json:"windowsProcesses,omitempty"`
+}
+
+// WindowsProcessStats is one Windows process started from a tmux pane.
+// CPUPercent is a share of one logical CPU, like Linux pane processes.
+type WindowsProcessStats struct {
+	PID             uint32  `json:"pid"`
+	ParentPID       uint32  `json:"parentPid"`
+	Name            string  `json:"name"`
+	Depth           int     `json:"depth"`
+	CPUPercent      float64 `json:"cpuPercent"`
+	CPUAvailable    bool    `json:"cpuAvailable"`
+	WorkingSetBytes uint64  `json:"workingSetBytes"`
+	UptimeSeconds   uint64  `json:"uptimeSeconds"`
 }
 
 type JobStatus string
