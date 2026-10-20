@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/moutansos/op/internal/domain"
 )
 
@@ -1044,6 +1046,126 @@ func TestMinimumSizeAndTabbedStatisticsRendering(t *testing.T) {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("statistics view does not contain %q:\n%s", expected, view)
 		}
+	}
+}
+
+func TestStatsPanelComparesWindowsHostAndWSL(t *testing.T) {
+	wsl := domain.HostStats{CPUPercent: 3.2, MemoryUsed: 1 << 30, MemoryTotal: 15 << 30, LoadAverage: [3]float64{0.74, 1.23, 1.49}, UptimeSeconds: 361380}
+	windows := domain.WindowsHostStats{
+		Ready: true, CPUPercent: 19, CPUAvailable: true, LogicalCPUs: 20,
+		MemoryUsed: 30 << 30, MemoryTotal: 32 << 30, UptimeSeconds: 347520,
+	}
+	plain := func(lines []string) []string {
+		result := make([]string, len(lines))
+		for index, line := range lines {
+			result[index] = ansi.Strip(line)
+		}
+		return result
+	}
+
+	wide := plain(hostComparisonLines(windows, wsl, 100))
+	for _, line := range wide {
+		if strings.HasSuffix(line, "…") {
+			t.Errorf("wide row %q was truncated", line)
+		}
+	}
+	if len(wide) != 2 || !strings.HasPrefix(wide[0], "Windows ") || !strings.HasPrefix(wide[1], "WSL ") {
+		t.Fatalf("wide rows = %q", wide)
+	}
+	for _, want := range []string{"19.0%", "30.0/32.0GiB", "94%", "up 4d0h", "20 CPUs"} {
+		if !strings.Contains(wide[0], want) {
+			t.Errorf("Windows row %q is missing %q", wide[0], want)
+		}
+	}
+	for _, want := range []string{"3.2%", "1.0/15.0GiB", "7%", "up 4d4h", "load 0.74 1.23 1.49"} {
+		if !strings.Contains(wide[1], want) {
+			t.Errorf("WSL row %q is missing %q", wide[1], want)
+		}
+	}
+	if strings.Index(wide[0], "Mem") != strings.Index(wide[1], "Mem") || strings.Index(wide[0], "up ") != strings.Index(wide[1], "up ") {
+		t.Errorf("columns are not aligned:\n%s\n%s", wide[0], wide[1])
+	}
+
+	if halfPanel := plain(hostComparisonLines(windows, wsl, 76)); len(halfPanel) != 2 {
+		t.Errorf("rows at the wide layout's 76-column stats panel = %q, want one per machine", halfPanel)
+	}
+	if got := formatMemoryPair(512<<20, 15<<30); got != "512.0MiB/15.0GiB" {
+		t.Errorf("mixed-unit memory = %q", got)
+	}
+
+	mixed := plain(hostComparisonLines(windows, wsl, 66))
+	if len(mixed) != 4 || !strings.HasPrefix(mixed[0], "Windows ") || !strings.HasPrefix(mixed[2], "WSL ") {
+		t.Errorf("rows at 66 columns = %q; when one machine needs two lines both must use two", mixed)
+	}
+
+	narrow := plain(hostComparisonLines(windows, wsl, 50))
+	if len(narrow) != 4 || !strings.Contains(narrow[3], "load 0.74") {
+		t.Fatalf("narrow rows = %q", narrow)
+	}
+	for _, line := range narrow {
+		if ansi.StringWidth(line) > 50 {
+			t.Errorf("narrow row %q is wider than 50", line)
+		}
+	}
+
+	windows.CPUAvailable = false
+	if rows := plain(hostComparisonLines(windows, wsl, 100)); !strings.Contains(rows[0], "CPU      -") {
+		t.Errorf("first Windows sample row = %q, want CPU -", rows[0])
+	}
+	if rows := plain(hostComparisonLines(domain.WindowsHostStats{}, wsl, 100)); !strings.Contains(rows[0], "starting") || len(rows) != 2 {
+		t.Errorf("starting rows = %q", rows)
+	}
+	failed := domain.WindowsHostStats{Error: "Windows host stats unavailable: powershell.exe was not found"}
+	if rows := plain(hostComparisonLines(failed, wsl, 100)); !strings.Contains(rows[0], "powershell.exe was not found") || !strings.HasPrefix(rows[1], "WSL ") {
+		t.Errorf("failed rows = %q", rows)
+	}
+
+	model := testModel(&fakeService{})
+	model.stats = domain.StatsSnapshot{Host: wsl}
+	if view := ansi.Strip(model.renderStats(100, 20)); strings.Contains(view, "Windows") || !strings.Contains(view, "Load 0.74 1.23 1.49") {
+		t.Errorf("plain Linux stats changed:\n%s", view)
+	}
+	model.stats.WindowsHost = &windows
+	if view := ansi.Strip(model.renderStats(100, 20)); !strings.Contains(view, "Windows ") || !strings.Contains(view, "WSL ") {
+		t.Errorf("WSL stats panel:\n%s", view)
+	}
+}
+
+func TestDashboardFitsTerminalWithLongRows(t *testing.T) {
+	projects := make([]domain.Project, 0, 60)
+	for index := range 60 {
+		name := fmt.Sprintf("API.CaseIntegration.CaseOutgoingProcessor-%02d", index)
+		projects = append(projects, domain.Project{
+			ID: name, Name: name, Path: "/repos/" + name,
+			Branch: "fix/update-case-integration-for-the-new-routing-rules", GitState: domain.GitStateDirty,
+		})
+	}
+	stats := domain.StatsSnapshot{
+		CapturedAt: time.Now(),
+		Host:       domain.HostStats{CPUPercent: 1.6, MemoryUsed: 2 << 30, MemoryTotal: 15 << 30, LoadAverage: [3]float64{12.74, 12.53, 11.67}, UptimeSeconds: 361380},
+		WindowsHost: &domain.WindowsHostStats{
+			Ready: true, CPUPercent: 45.9, CPUAvailable: true, LogicalCPUs: 128,
+			MemoryUsed: 900 << 30, MemoryTotal: 1000 << 30, UptimeSeconds: 3473520,
+		},
+	}
+	for _, size := range [][2]int{{160, 45}, {150, 40}, {100, 40}, {80, 40}, {70, 40}, {120, 20}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			model := loadProjectsForTest(testModel(&fakeService{}), projects...)
+			model = updateTestModel(model, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			model = updateTestModel(model, statsLoadedMsg{snapshot: stats})
+			for _, section := range []section{projectsSection, statsSection} {
+				model.section = section
+				lines := strings.Split(model.View(), "\n")
+				if len(lines) > size[1] {
+					t.Fatalf("section %d: view has %d lines for a %d-line terminal; the top would scroll away", section, len(lines), size[1])
+				}
+				for index, line := range lines {
+					if width := ansi.StringWidth(line); width > size[0] {
+						t.Fatalf("section %d: line %d is %d columns in a %d-column terminal: %q", section, index, width, size[0], ansi.Strip(line))
+					}
+				}
+			}
+		})
 	}
 }
 

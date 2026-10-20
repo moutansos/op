@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/moutansos/op/internal/domain"
 )
 
@@ -252,6 +253,9 @@ func (m Model) renderStats(width, height int) string {
 		truncate(fmt.Sprintf("CPU %5.1f%%   Memory %s / %s", host.CPUPercent, formatBytes(host.MemoryUsed), formatBytes(host.MemoryTotal)), width),
 		truncate(fmt.Sprintf("Load %.2f %.2f %.2f   Uptime %s", host.LoadAverage[0], host.LoadAverage[1], host.LoadAverage[2], formatDuration(host.UptimeSeconds)), width),
 	}
+	if m.stats.WindowsHost != nil {
+		lines = hostComparisonLines(*m.stats.WindowsHost, host, width)
+	}
 	if !m.stats.CapturedAt.IsZero() {
 		lines = append(lines, dimStyle.Render(truncate("sample "+m.stats.CapturedAt.Format(time.Kitchen), width)))
 	}
@@ -285,6 +289,77 @@ func (m Model) renderStats(width, height int) string {
 		}
 	}
 	return limitLines(lines, height)
+}
+
+// hostComparisonLines shows the Windows machine and the WSL virtual machine
+// running inside it with the same columns, so the two can be read side by side.
+func hostComparisonLines(windows domain.WindowsHostStats, wsl domain.HostStats, width int) []string {
+	const label = "%-8s"
+	type row struct{ first, second string }
+	makeRow := func(name, cpu string, used, total, uptime uint64, extra string) row {
+		return row{
+			first:  fmt.Sprintf(label+"CPU %6s  Mem %13s %4s", name, cpu, formatMemoryPair(used, total), formatPercent(used, total)),
+			second: fmt.Sprintf("up %-7s %s", formatDuration(uptime), extra),
+		}
+	}
+	joined := func(r row) string { return strings.TrimRight(r.first+"  "+r.second, " ") }
+
+	var windowsRow *row
+	var windowsStatus string
+	switch {
+	case windows.Error != "":
+		windowsStatus = errorStyle.Render(truncate(fmt.Sprintf(label+"%s", "Windows", windows.Error), width))
+	case !windows.Ready:
+		windowsStatus = dimStyle.Render(truncate(fmt.Sprintf(label+"starting Windows sampler…", "Windows"), width))
+	default:
+		cpu := "-"
+		if windows.CPUAvailable {
+			cpu = fmt.Sprintf("%.1f%%", windows.CPUPercent)
+		}
+		r := makeRow("Windows", cpu, windows.MemoryUsed, windows.MemoryTotal, windows.UptimeSeconds, fmt.Sprintf("%d CPUs", windows.LogicalCPUs))
+		windowsRow = &r
+	}
+	load := fmt.Sprintf("load %.2f %.2f %.2f", wsl.LoadAverage[0], wsl.LoadAverage[1], wsl.LoadAverage[2])
+	wslRow := makeRow("WSL", fmt.Sprintf("%.1f%%", wsl.CPUPercent), wsl.MemoryUsed, wsl.MemoryTotal, wsl.UptimeSeconds, load)
+
+	// Both machines use one line each, or both use two, so their columns line up.
+	rows := []row{wslRow}
+	if windowsRow != nil {
+		rows = append([]row{*windowsRow}, rows...)
+	}
+	oneLine := true
+	for _, r := range rows {
+		oneLine = oneLine && ansi.StringWidth(joined(r)) <= width
+	}
+	var lines []string
+	if windowsStatus != "" {
+		lines = append(lines, windowsStatus)
+	}
+	for _, r := range rows {
+		if oneLine {
+			lines = append(lines, joined(r))
+		} else {
+			lines = append(lines, truncate(r.first, width), truncate(strings.TrimRight(fmt.Sprintf(label, "")+r.second, " "), width))
+		}
+	}
+	return lines
+}
+
+// formatMemoryPair prints "30.9/31.7GiB", repeating the unit only when the
+// two values need different ones.
+func formatMemoryPair(used, total uint64) string {
+	usedText, totalText := formatBytes(used), formatBytes(total)
+	if unit := strings.TrimLeft(totalText, "0123456789."); unit != "" && strings.HasSuffix(usedText, unit) {
+		usedText = strings.TrimSuffix(usedText, unit)
+	}
+	return usedText + "/" + totalText
+}
+
+func formatPercent(used, total uint64) string {
+	if total == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.0f%%", float64(used)/float64(total)*100)
 }
 
 func formatProcessCPU(process domain.PaneProcessStats) string {
@@ -349,13 +424,17 @@ func renderPanel(title, body string, width, height int, focused bool, stale erro
 	if body != "" {
 		content += "\n" + body
 	}
+	// Width includes padding but not the border, so the panel is exactly width
+	// columns wide with width-4 columns of text, which is what callers size
+	// their content for. MaxHeight keeps an overflowing body from making the
+	// dashboard taller than the terminal, which would scroll its top rows away.
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Padding(0, 1).
-		Width(max(1, width-4))
+		Width(max(1, width-2))
 	if height > 0 {
-		style = style.Height(max(1, height-2))
+		style = style.Height(max(1, height-2)).MaxHeight(height)
 	}
 	return style.Render(content)
 }

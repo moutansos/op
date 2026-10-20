@@ -155,6 +155,14 @@ Windows. Git for Windows keeps those repositories exactly as Windows tools see t
 
 Repository state is refreshed in the background and cached; see "Repository State" in the README.
 
+## Dashboard Statistics
+
+Under WSL the dashboard's System panel shows both the Windows machine and the WSL virtual machine.
+WSL is given only part of the machine's memory (half by default, adjustable in `%USERPROFILE%\.wslconfig`),
+so the two memory figures can differ widely. Windows figures are read by a `powershell.exe` process
+started through interop; `powershell.exe` must be reachable on the WSL `PATH` or under
+`/mnt/<drive>/Windows/System32`. See "Statistics" in the README.
+
 ## Paths And Terminal Behavior
 
 The current Windows working directory is supplied with WSL's documented `--cd` option. This keeps

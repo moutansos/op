@@ -61,6 +61,7 @@ type Collector struct {
 	foreground foregroundResolver
 	detector   *agents.Detector
 	capturer   agents.Capturer
+	windows    windowsHostSource
 }
 
 // Options configures optional collector capabilities.
@@ -79,6 +80,9 @@ func NewCollector(options Options) *Collector {
 	collector.foreground = agents.ResolveForeground
 	collector.detector = options.Detector
 	collector.capturer = options.Capturer
+	if source := newWindowsHostSource(); source != nil {
+		collector.windows = source
+	}
 	return collector
 }
 
@@ -148,6 +152,11 @@ func (c *Collector) Collect(ctx context.Context, tmux domain.TmuxSnapshot) (doma
 		agentsError = "agent detection is disabled or unavailable"
 	}
 	agentStates := c.collectAgents(ctx, capturedAt, tmux, foregrounds)
+	var windowsHost *domain.WindowsHostStats
+	if c.windows != nil {
+		sample := c.windows.Sample(ctx)
+		windowsHost = &sample
+	}
 	if err := ctx.Err(); err != nil {
 		return domain.StatsSnapshot{}, err
 	}
@@ -155,6 +164,7 @@ func (c *Collector) Collect(ctx context.Context, tmux domain.TmuxSnapshot) (doma
 		AgentsError: agentsError,
 		CapturedAt:  capturedAt,
 		Host:        host,
+		WindowsHost: windowsHost,
 		Processes:   processes,
 		Agents:      agentStates,
 	}, nil

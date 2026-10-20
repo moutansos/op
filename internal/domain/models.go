@@ -157,9 +157,12 @@ type TmuxPane struct {
 
 type StatsSnapshot struct {
 	// AgentsError distinguishes disabled/unavailable detection from no agents.
-	AgentsError string             `json:"agentsError,omitempty"`
-	CapturedAt  time.Time          `json:"capturedAt"`
-	Host        HostStats          `json:"host"`
+	AgentsError string    `json:"agentsError,omitempty"`
+	CapturedAt  time.Time `json:"capturedAt"`
+	Host        HostStats `json:"host"`
+	// WindowsHost is set only when op runs inside WSL. Host then describes
+	// the WSL virtual machine, and this describes the Windows machine.
+	WindowsHost *WindowsHostStats  `json:"windowsHost,omitempty"`
 	Processes   []PaneProcessStats `json:"processes"`
 	Agents      []PaneAgentState   `json:"agents,omitempty"`
 }
@@ -246,6 +249,20 @@ type HostStats struct {
 	MemoryTotal   uint64     `json:"memoryTotal"`
 	LoadAverage   [3]float64 `json:"loadAverage"`
 	UptimeSeconds uint64     `json:"uptimeSeconds"`
+}
+
+// WindowsHostStats describes the Windows machine hosting a WSL distribution.
+// CPU usage needs two samples, so CPUAvailable is false at first. Ready is
+// false until the first sample arrives; Error explains why sampling failed.
+type WindowsHostStats struct {
+	Ready         bool    `json:"ready"`
+	Error         string  `json:"error,omitempty"`
+	CPUPercent    float64 `json:"cpuPercent"`
+	CPUAvailable  bool    `json:"cpuAvailable"`
+	LogicalCPUs   int     `json:"logicalCpus"`
+	MemoryUsed    uint64  `json:"memoryUsed"`
+	MemoryTotal   uint64  `json:"memoryTotal"`
+	UptimeSeconds uint64  `json:"uptimeSeconds"`
 }
 
 type PaneProcessStats struct {

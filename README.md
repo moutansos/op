@@ -577,6 +577,15 @@ panel is scoped to the managed tmux session: for every pane it walks the pane ro
 descendants, then aggregates CPU deltas and resident memory with pane/window identity, command,
 uptime, and live/dead state.
 
+Under WSL, the host figures describe the WSL virtual machine, so the panel shows two aligned rows
+instead: `Windows` for the whole machine and `WSL` for the virtual machine inside it, each with CPU,
+used/total memory, and uptime, plus the logical CPU count for Windows and the load average for WSL.
+Windows figures come from one long-lived `powershell.exe` started through WSL interop that reads
+system counters directly; it adds a few milliseconds per refresh and exits with the dashboard. If it
+cannot start, the Windows row shows why and retries every 30 seconds; the WSL row is unaffected.
+`GET /v1/stats` returns the same data as `windowsHost`. The process list still covers Linux
+processes only, so Windows programs started from a pane appear as WSL's small interop stub.
+
 The first process sample shows CPU as unavailable until a delta exists. Processes that exit or
 cannot be inspected do not fail the whole dashboard. Host/process stats refresh at
 `stats.refreshInterval` (2 seconds by default); projects and tmux refresh at
