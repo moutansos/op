@@ -329,7 +329,9 @@ only `paths.linux` is used by the Linux/WSL runtime.
 
 `repoDirectory` must exist before listing projects. Its immediate real directories become catalog
 entries; directory symlinks are not followed. `customEntries` add explicitly named Linux paths
-outside that root.
+outside that root. A long-running process reuses its listing while `repoDirectory`'s modification
+time is unchanged, which adding, removing, or renaming a repository changes, and re-reads it at
+least once a minute; looking up a project that is not in the listing always re-reads it.
 
 `preferredShell` may contain an executable plus arguments but not shell operators.
 On WSL, `pwsh.exe` and `powershell.exe` are launched through Windows interop and use
@@ -599,8 +601,9 @@ about 10 milliseconds. The dashboard's own sampler appears under the pane runnin
 The first process sample shows CPU as unavailable until a delta exists. Processes that exit or
 cannot be inspected do not fail the whole dashboard. Host/process stats refresh at
 `stats.refreshInterval` (2 seconds by default); projects and tmux refresh at
-`stats.tmuxRefreshInterval` (5 seconds by default). The last successful snapshot remains visible and
-is marked stale if a refresh fails.
+`stats.tmuxRefreshInterval` (5 seconds by default). Process statistics use the panes from the most
+recent tmux refresh, because each tmux snapshot runs a few tmux commands per window. The last
+successful snapshot remains visible and is marked stale if a refresh fails.
 
 ### Repository State
 

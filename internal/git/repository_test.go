@@ -433,7 +433,7 @@ func TestWindowsGitIsUsedWhereTheSelectorChoosesIt(t *testing.T) {
 	}
 	status := []byte("# branch.oid abc123\n# branch.head main\n# branch.upstream origin/main\n")
 	runner := &fakeRunner{responses: []commandResponse{{output: status}, {}, {}}}
-	repository := gitrepo.NewRepositoryWithExecutableSelector(runner, func(string) string { return gitrepo.WindowsGitExecutable })
+	repository := gitrepo.NewRepositoryWithExecutableSelector(runner, func(string) string { return "/mnt/c/Program Files/Git/cmd/git.exe" })
 
 	if err := repository.Pull(context.Background(), repositoryPath); err != nil {
 		t.Fatalf("Pull() error = %v", err)
@@ -443,9 +443,9 @@ func TestWindowsGitIsUsedWhereTheSelectorChoosesIt(t *testing.T) {
 		t.Fatalf("CreateWorktree() error = %v", err)
 	}
 	assertCommands(t, runner.commands, []gitrepo.Command{
-		{Directory: repositoryPath, Name: "git.exe", Args: []string{"--no-optional-locks", "status", "--porcelain=v2", "--branch"}},
-		{Directory: repositoryPath, Name: "git.exe", Args: []string{"pull", "--ff-only"}},
-		{Directory: repositoryPath, Name: "git.exe", Args: []string{"worktree", "add", "-b", "feature/x", "--", "../project-feature-x"}},
+		{Directory: repositoryPath, Name: "/mnt/c/Program Files/Git/cmd/git.exe", Args: []string{"--no-optional-locks", "status", "--porcelain=v2", "--branch"}},
+		{Directory: repositoryPath, Name: "/mnt/c/Program Files/Git/cmd/git.exe", Args: []string{"pull", "--ff-only"}},
+		{Directory: repositoryPath, Name: "/mnt/c/Program Files/Git/cmd/git.exe", Args: []string{"worktree", "add", "-b", "feature/x", "--", "../project-feature-x"}},
 	})
 	if want := filepath.Join(parent, "project-feature-x"); result.Path != want {
 		t.Fatalf("CreateWorktree() path = %q, want %q", result.Path, want)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/moutansos/op/internal/agents"
 	"github.com/moutansos/op/internal/domain"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 const defaultMaxProcessesPerPane = 1024
@@ -79,6 +80,10 @@ type Options struct {
 
 // NewCollector constructs a collector backed by gopsutil.
 func NewCollector(options Options) *Collector {
+	// gopsutil otherwise re-reads /proc/stat for the boot time for every
+	// process on every refresh, which was the largest part of the dashboard's
+	// CPU use. The boot time does not change while op runs.
+	process.EnableBootTimeCache(true)
 	collector := newCollector(gopsutilHost{}, gopsutilProcessFactory{}, time.Now, defaultMaxProcessesPerPane)
 	collector.foreground = agents.ResolveForeground
 	collector.detector = options.Detector

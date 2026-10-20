@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 
 	"github.com/moutansos/op/internal/config"
@@ -19,11 +21,25 @@ import (
 
 const projectIDPrefix = "project-"
 
+// catalogRescanAfter bounds how long a listing is reused while the repository
+// root's modification time is unchanged. Adding, removing, or renaming a
+// repository changes that time immediately; this catches changes inside a
+// repository, such as a .git file replacing a .git directory.
+const catalogRescanAfter = time.Minute
+
 // Catalog discovers immediate children of a repository root and combines them
-// with the configured Linux custom entries.
+// with the configured Linux custom entries. Discovery is cached because the
+// root can be a Windows drive under WSL, where checking every repository
+// costs over 100 ms of CPU.
 type Catalog struct {
 	repositoryRoot string
 	customEntries  []config.CustomEntry
+	now            func() time.Time
+
+	mu             sync.Mutex
+	scanned        []domain.Project
+	scannedModTime time.Time
+	scannedAt      time.Time
 }
 
 // NewCatalog constructs a catalog from an expanded, validated configuration.
@@ -52,20 +68,66 @@ func NewCatalog(cfg config.Config) (*Catalog, error) {
 		}
 	}
 
-	return &Catalog{repositoryRoot: cfg.RepoDirectory, customEntries: entries}, nil
+	return &Catalog{repositoryRoot: cfg.RepoDirectory, customEntries: entries, now: time.Now}, nil
 }
 
 // RepositoryRoot returns the normalized configured repository root.
 func (c *Catalog) RepositoryRoot() string { return c.repositoryRoot }
 
-// List returns a fresh, deterministically sorted snapshot. Repository entries
-// are immediate real directories; directory symlinks are not followed.
+// List returns a deterministically sorted snapshot. Repository entries are
+// immediate real directories; directory symlinks are not followed.
 func (c *Catalog) List(ctx context.Context) ([]domain.Project, error) {
-	const op = "project.list"
+	return c.list(ctx, false)
+}
 
+func (c *Catalog) list(ctx context.Context, rescan bool) ([]domain.Project, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	discovered, err := c.discover(ctx, rescan)
+	if err != nil {
+		return nil, err
+	}
+	projects := make([]domain.Project, 0, len(discovered)+len(c.customEntries))
+	projects = append(projects, discovered...)
+	for _, entry := range c.customEntries {
+		projects = append(projects, newProject(entry.Name, entry.Paths.Linux, domain.ProjectKindCustomEntry))
+	}
+
+	if err := validateUniqueProjects(projects); err != nil {
+		return nil, err
+	}
+	sort.Slice(projects, func(i, j int) bool {
+		if projects[i].Name != projects[j].Name {
+			return projects[i].Name < projects[j].Name
+		}
+		if projects[i].Path != projects[j].Path {
+			return projects[i].Path < projects[j].Path
+		}
+		return projects[i].ID < projects[j].ID
+	})
+	return projects, nil
+}
+
+// discover returns the repository root's children, reusing the previous scan
+// while the root's modification time is unchanged and the scan is recent.
+func (c *Catalog) discover(ctx context.Context, rescan bool) ([]domain.Project, error) {
+	const op = "project.list"
+	info, err := os.Stat(c.repositoryRoot)
+	if err != nil {
+		code := domain.ErrorCodeInternal
+		if errors.Is(err, os.ErrNotExist) {
+			code = domain.ErrorCodeNotFound
+		}
+		return nil, domain.ResourceError(code, op, c.repositoryRoot, "read repository root", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if !rescan && c.scanned != nil && info.ModTime().Equal(c.scannedModTime) && now.Sub(c.scannedAt) < catalogRescanAfter {
+		return append([]domain.Project(nil), c.scanned...), nil
+	}
+
 	entries, err := os.ReadDir(c.repositoryRoot)
 	if err != nil {
 		code := domain.ErrorCodeInternal
@@ -74,8 +136,7 @@ func (c *Catalog) List(ctx context.Context) ([]domain.Project, error) {
 		}
 		return nil, domain.ResourceError(code, op, c.repositoryRoot, "read repository root", err)
 	}
-
-	projects := make([]domain.Project, 0, len(entries)+len(c.customEntries))
+	projects := make([]domain.Project, 0, len(entries))
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -95,27 +156,8 @@ func (c *Catalog) List(ctx context.Context) ([]domain.Project, error) {
 		}
 		projects = append(projects, newProject(entry.Name(), path, kind))
 	}
-
-	for _, entry := range c.customEntries {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		projects = append(projects, newProject(entry.Name, entry.Paths.Linux, domain.ProjectKindCustomEntry))
-	}
-
-	if err := validateUniqueProjects(projects); err != nil {
-		return nil, err
-	}
-	sort.Slice(projects, func(i, j int) bool {
-		if projects[i].Name != projects[j].Name {
-			return projects[i].Name < projects[j].Name
-		}
-		if projects[i].Path != projects[j].Path {
-			return projects[i].Path < projects[j].Path
-		}
-		return projects[i].ID < projects[j].ID
-	})
-	return projects, nil
+	c.scanned, c.scannedModTime, c.scannedAt = projects, info.ModTime(), now
+	return append([]domain.Project(nil), projects...), nil
 }
 
 // Resolve finds a project by stable ID or exact display/window name.
@@ -124,16 +166,34 @@ func (c *Catalog) Resolve(ctx context.Context, reference string) (domain.Project
 	if reference == "" {
 		return domain.Project{}, domain.FieldError(domain.ErrorCodeInvalidArgument, op, "reference", "must not be empty")
 	}
-	projects, err := c.List(ctx)
+	project, found, err := c.find(ctx, func(candidate domain.Project) bool {
+		return candidate.ID == reference || candidate.Name == reference
+	})
 	if err != nil {
 		return domain.Project{}, err
 	}
-	for _, candidate := range projects {
-		if candidate.ID == reference || candidate.Name == reference {
-			return candidate, nil
-		}
+	if found {
+		return project, nil
 	}
 	return domain.Project{}, domain.ResourceError(domain.ErrorCodeNotFound, op, reference, "project not found", nil)
+}
+
+// find searches the cached listing first and re-scans once on a miss, so a
+// project created a moment ago is found even within the root's timestamp
+// granularity.
+func (c *Catalog) find(ctx context.Context, match func(domain.Project) bool) (domain.Project, bool, error) {
+	for _, rescan := range []bool{false, true} {
+		projects, err := c.list(ctx, rescan)
+		if err != nil {
+			return domain.Project{}, false, err
+		}
+		for _, candidate := range projects {
+			if match(candidate) {
+				return candidate, true, nil
+			}
+		}
+	}
+	return domain.Project{}, false, nil
 }
 
 // ResolveByID finds a project by its stable ID.
@@ -154,14 +214,12 @@ func (c *Catalog) resolveExact(ctx context.Context, op, field, value string, key
 	if value == "" {
 		return domain.Project{}, domain.FieldError(domain.ErrorCodeInvalidArgument, op, field, "must not be empty")
 	}
-	projects, err := c.List(ctx)
+	project, found, err := c.find(ctx, func(candidate domain.Project) bool { return key(candidate) == value })
 	if err != nil {
 		return domain.Project{}, err
 	}
-	for _, candidate := range projects {
-		if key(candidate) == value {
-			return candidate, nil
-		}
+	if found {
+		return project, nil
 	}
 	return domain.Project{}, domain.ResourceError(domain.ErrorCodeNotFound, op, value, "project not found", nil)
 }

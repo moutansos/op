@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moutansos/op/internal/config"
 	"github.com/moutansos/op/internal/domain"
@@ -375,6 +376,73 @@ func TestCustomEntryNamesAreLabelsThatMayContainSeparators(t *testing.T) {
 		if !domain.IsCode(err, domain.ErrorCodeConfig) {
 			t.Fatalf("NewCatalog(name %q) error = %v, want config", name, err)
 		}
+	}
+}
+
+func TestCatalogReusesListingUntilRootChangesOrItIsAMinuteOld(t *testing.T) {
+	root := t.TempDir()
+	repository := filepath.Join(root, "a")
+	mustMkdir(t, filepath.Join(repository, ".git"))
+	catalog := newTestCatalog(t, root, nil)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	catalog.now = func() time.Time { return now }
+	kinds := func() map[string]domain.ProjectKind {
+		t.Helper()
+		projects, err := catalog.List(context.Background())
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		result := make(map[string]domain.ProjectKind, len(projects))
+		for _, project := range projects {
+			result[project.Name] = project.Kind
+		}
+		return result
+	}
+	setRootTime := func(at time.Time) {
+		t.Helper()
+		if err := os.Chtimes(root, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setRootTime(now)
+	if got := kinds(); got["a"] != domain.ProjectKindRepository {
+		t.Fatalf("first listing = %v", got)
+	}
+
+	// A change inside a repository does not touch the root.
+	if err := os.RemoveAll(filepath.Join(repository, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, ".git"), []byte("gitdir: elsewhere\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setRootTime(now)
+	if got := kinds(); got["a"] != domain.ProjectKindRepository {
+		t.Fatalf("listing within a minute = %v, want the cached kind", got)
+	}
+	now = now.Add(catalogRescanAfter)
+	if got := kinds(); got["a"] != domain.ProjectKindWorktree {
+		t.Fatalf("listing after a minute = %v, want a rescan", got)
+	}
+
+	mustMkdir(t, filepath.Join(root, "b"))
+	setRootTime(now.Add(time.Second))
+	if got := kinds(); len(got) != 2 {
+		t.Fatalf("listing after the root changed = %v, want b", got)
+	}
+
+	// A repository created within the root's timestamp granularity is not in
+	// the cached listing, but resolving it re-scans.
+	mustMkdir(t, filepath.Join(root, "c"))
+	setRootTime(now.Add(time.Second))
+	if got := kinds(); len(got) != 2 {
+		t.Fatalf("listing with an unchanged root time = %v, want cached", got)
+	}
+	if project, err := catalog.ResolveByName(context.Background(), "c"); err != nil || project.Name != "c" {
+		t.Fatalf("ResolveByName(c) = %+v, %v", project, err)
+	}
+	if got := kinds(); len(got) != 3 {
+		t.Fatalf("listing after the resolve rescan = %v", got)
 	}
 }
 

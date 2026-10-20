@@ -37,4 +37,12 @@ func TestSelectExecutableUsesWindowsGitOnlyBelowDriveMounts(t *testing.T) {
 	if got := selectExecutable("/mnt/d/source", nil); got != linuxGitExecutable {
 		t.Fatalf("selectExecutable() without drive mounts = %q", got)
 	}
+	for executable, want := range map[string]bool{
+		"git.exe": true, "/mnt/c/Program Files/Git/cmd/git.exe": true, "/mnt/c/Git/cmd/GIT.EXE": true,
+		"git": false, "/usr/bin/git": false, "/opt/git.exe.d/git": false,
+	} {
+		if got := isWindowsGit(executable); got != want {
+			t.Errorf("isWindowsGit(%q) = %v, want %v", executable, got, want)
+		}
+	}
 }

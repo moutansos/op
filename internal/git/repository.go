@@ -358,7 +358,7 @@ func (r *Repository) CreateWorktree(ctx context.Context, options WorktreeOptions
 
 	git := r.executable(options.Repository)
 	target := destination
-	if git == WindowsGitExecutable {
+	if isWindowsGit(git) {
 		// Git for Windows cannot interpret a Linux absolute path; the sibling
 		// relationship is already validated, so a relative path is equivalent.
 		target = "../" + directory

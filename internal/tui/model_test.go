@@ -1184,6 +1184,33 @@ func TestStatsPanelShowsWindowsProcessTreeUnderItsPane(t *testing.T) {
 	}
 }
 
+type statsForTmuxService struct {
+	*fakeService
+	forTmux []domain.TmuxSnapshot
+}
+
+func (s *statsForTmuxService) GetStatsForTmux(_ context.Context, snapshot domain.TmuxSnapshot) (domain.StatsSnapshot, error) {
+	s.forTmux = append(s.forTmux, snapshot)
+	return domain.StatsSnapshot{CapturedAt: time.Now()}, nil
+}
+
+func TestStatsRefreshReusesTheHeldTmuxSnapshot(t *testing.T) {
+	service := &statsForTmuxService{fakeService: &fakeService{}}
+	model := NewModel(context.Background(), service, Options{
+		ProjectRefreshInterval: time.Hour, TmuxRefreshInterval: time.Hour, StatsRefreshInterval: time.Hour, RefreshTimeout: time.Second,
+	})
+
+	if msg := model.loadStatsCmd()(); msg.(statsLoadedMsg).err != nil || service.statsCalls != 1 || len(service.forTmux) != 0 {
+		t.Fatalf("stats before any tmux snapshot: full calls = %d, reused = %d", service.statsCalls, len(service.forTmux))
+	}
+	held := domain.TmuxSnapshot{CapturedAt: time.Now(), Session: &domain.TmuxSession{Name: "code"}}
+	model = updateTestModel(model, tmuxLoadedMsg{snapshot: held})
+	model.loadStatsCmd()()
+	if service.statsCalls != 1 || service.tmuxCalls != 0 || len(service.forTmux) != 1 || service.forTmux[0].Session.Name != "code" {
+		t.Fatalf("stats with a held snapshot: full calls = %d, tmux calls = %d, reused = %+v", service.statsCalls, service.tmuxCalls, service.forTmux)
+	}
+}
+
 func TestDashboardFitsTerminalWithLongRows(t *testing.T) {
 	projects := make([]domain.Project, 0, 60)
 	for index := range 60 {

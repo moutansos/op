@@ -84,10 +84,23 @@ func (m Model) loadTmuxCmd() tea.Cmd {
 	}
 }
 
+// statsForTmux is implemented by services that can collect statistics for a
+// tmux snapshot the dashboard already holds, saving a second snapshot.
+type statsForTmux interface {
+	GetStatsForTmux(context.Context, domain.TmuxSnapshot) (domain.StatsSnapshot, error)
+}
+
 func (m Model) loadStatsCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, m.options.RefreshTimeout)
 		defer cancel()
+		// A tmux snapshot starts about two dozen tmux clients, so stats reuse
+		// the one taken by the tmux refresh; its panes are at most one tmux
+		// refresh interval old.
+		if source, ok := m.service.(statsForTmux); ok && m.haveTmux && m.tmux.Session != nil {
+			snapshot, err := source.GetStatsForTmux(ctx, m.tmux)
+			return statsLoadedMsg{snapshot: snapshot, err: err}
+		}
 		snapshot, err := m.service.GetStatsSnapshot(ctx)
 		return statsLoadedMsg{snapshot: snapshot, err: err}
 	}

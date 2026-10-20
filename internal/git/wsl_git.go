@@ -24,6 +24,12 @@ func selectExecutable(directory string, windowsRoots []string) string {
 	return linuxGitExecutable
 }
 
+// isWindowsGit reports whether executable, a name or an absolute WSL path,
+// is Git for Windows.
+func isWindowsGit(executable string) bool {
+	return strings.EqualFold(path.Base(executable), WindowsGitExecutable)
+}
+
 // windowsDriveMounts returns mount points of Windows drives from
 // /proc/self/mounts content. WSL 1 reports drvfs directly; WSL 2 reports 9p
 // with an aname=drvfs option.
