@@ -117,17 +117,20 @@ are removed and clean `/u` (Win32-to-WSL only) entries are appended, preventing 
 
 Plain `op` inside a project window opens that project's action menu instead of the project picker.
 To behave the same from a Windows shell pane (for example a `pwsh.exe` preferred shell) as from a
-Linux shell pane, the Linux `op` adds `TMUX` and `TMUX_PANE` to its `WSLENV` when it runs under
-WSL. A tmux server started by `op` inherits that, so Windows programs in its panes see both
-variables, and `op.exe` forwards them back into WSL.
+Linux shell pane, Windows programs in the pane need `TMUX` and `TMUX_PANE`, and `op.exe` forwards
+them back into WSL. The same variables let the dashboard attribute Windows processes and agents to
+their pane.
 
-A tmux server that was already running before `op` started it does not have that `WSLENV`. Either
-restart that server (`tmux kill-server`) so `op` starts it, or add the variables in your Linux
-shell profile:
+A new tmux pane takes its environment from the tmux server, not from the program that creates the
+window, so under WSL `op` adds `TMUX:TMUX_PANE` to the server's global `WSLENV` (`tmux
+set-environment -g`) whenever it sets up the managed session, keeping any other entries. Every pane
+created afterwards forwards both variables, whoever creates it, including panes started directly in
+`pwsh.exe`. The Linux `op` also adds them to its own `WSLENV`, for Windows programs it starts itself.
 
-```sh
-export WSLENV="${WSLENV:+$WSLENV:}TMUX:TMUX_PANE"
-```
+Panes created before that keep their old environment, and so do the programs already running in
+them. Their Windows processes are not attributed to the pane until the pane is restarted, for
+example with `tmux respawn-pane -k -t <pane>` (this ends the pane's current program) or by closing
+and reopening the window.
 
 ## Preferred Shell
 
@@ -164,8 +167,8 @@ started through interop; `powershell.exe` must be reachable on the WSL `PATH` or
 `/mnt/<drive>/Windows/System32`. See "Statistics" in the README.
 
 The process list also shows Windows programs started from each pane, found through the `TMUX` and
-`TMUX_PANE` variables they inherit. Panes of a tmux server started without those variables in
-`WSLENV` show only the Linux interop stub; see "Running op From Windows Shells Inside tmux" above.
+`TMUX_PANE` variables they inherit. Panes created before `op` forwarded those variables show only
+the Linux interop stub until restarted; see "Running op From Windows Shells Inside tmux" above.
 Programs running as administrator cannot be inspected and are left out.
 
 ## Paths And Terminal Behavior

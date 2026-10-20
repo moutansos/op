@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -191,6 +192,64 @@ func TestIntegrationProjectWindowKeepsTargetSyntaxCharactersInName(t *testing.T)
 		if err != nil || !reused.Reused || reused.Window.ID != opened.Window.ID {
 			t.Fatalf("reuse of %q = %+v, error = %v", name, reused, err)
 		}
+	}
+}
+
+func TestIntegrationNewPanesForwardTmuxToWindowsUnderWSL(t *testing.T) {
+	if os.Getenv("OP_TMUX_INTEGRATION") != "1" {
+		t.Skip("set OP_TMUX_INTEGRATION=1 to run isolated tmux integration tests")
+	}
+	executable, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux is not installed")
+	}
+	root := t.TempDir()
+	socket := integrationSocket(t, executable)
+	raw := rawTmux{executable: executable, socket: socket}
+	// Start the server with a WSLENV that does not forward TMUX, as a server
+	// started before op, or by another tool, would have.
+	bootstrap := exec.Command(executable, "-S", socket, "new-session", "-d", "-s", "code", "-n", "user", "sleep 300")
+	bootstrap.Env = append(os.Environ(), "WSLENV=WT_SESSION:WT_PROFILE_ID:")
+	if output, err := bootstrap.CombinedOutput(); err != nil {
+		t.Fatalf("start server: %v: %s", err, output)
+	}
+	manager, err := New(context.Background(), ManagerConfig{
+		Session: "code", DashboardWindow: "op", Socket: socket, StartDirectory: root,
+		DashboardCommand: "sleep 300", EditorCommand: "sleep 300", PreferredShell: "sh",
+		ShellPaneRows: 10, DefaultProfile: "integration",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	manager.lookupEnv = func(key string) string {
+		if key == "WSL_DISTRO_NAME" {
+			return "Ubuntu"
+		}
+		return ""
+	}
+	if _, err := manager.EnsureMainSession(context.Background()); err != nil {
+		t.Fatalf("EnsureMainSession() error = %v", err)
+	}
+	global, err := raw.run(context.Background(), "show-environment", "-g", "WSLENV")
+	if err != nil || strings.TrimSpace(global) != "WSLENV=WT_SESSION:WT_PROFILE_ID:TMUX:TMUX_PANE" {
+		t.Fatalf("global WSLENV = %q, %v", global, err)
+	}
+
+	// A pane created later, by anyone, inherits it.
+	paneID, err := raw.run(context.Background(), "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "code", "sleep 300")
+	if err != nil {
+		t.Fatalf("new-window: %v", err)
+	}
+	pid, err := raw.run(context.Background(), "display-message", "-p", "-t", strings.TrimSpace(paneID), "#{pane_pid}")
+	if err != nil {
+		t.Fatalf("pane pid: %v", err)
+	}
+	environ, err := os.ReadFile("/proc/" + strings.TrimSpace(pid) + "/environ")
+	if err != nil {
+		t.Fatalf("read pane environment: %v", err)
+	}
+	if !slices.Contains(strings.Split(string(environ), "\x00"), "WSLENV=WT_SESSION:WT_PROFILE_ID:TMUX:TMUX_PANE") {
+		t.Fatalf("new pane WSLENV does not forward TMUX: %q", environ)
 	}
 }
 

@@ -15,7 +15,13 @@ func ExportTmuxToWindows() {
 	if os.Getenv("WSL_DISTRO_NAME") == "" && os.Getenv("WSL_INTEROP") == "" {
 		return
 	}
-	_ = os.Setenv("WSLENV", bidirectionalWSLEnv(os.Getenv("WSLENV"), tmuxVariables))
+	_ = os.Setenv("WSLENV", ForwardTmuxInWSLEnv(os.Getenv("WSLENV")))
+}
+
+// ForwardTmuxInWSLEnv returns a WSLENV value that forwards TMUX and TMUX_PANE
+// in both directions, keeping every other entry.
+func ForwardTmuxInWSLEnv(value string) string {
+	return bidirectionalWSLEnv(value, tmuxVariables)
 }
 
 // bidirectionalWSLEnv replaces any existing entries for names with entries

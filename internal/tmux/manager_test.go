@@ -1554,6 +1554,7 @@ type fakeClient struct {
 	panes                    map[string][]*paneState
 	options                  map[string]map[string]string
 	serverOptions            map[string]string
+	globalEnvironment        map[string]string
 	bindings                 map[string]string
 	sessionOptions           map[string]string
 	splitShell               map[string]string
@@ -1588,7 +1589,8 @@ func newFakeClient() *fakeClient {
 	return &fakeClient{
 		windows: make(map[string]*windowState), panes: make(map[string][]*paneState),
 		options: make(map[string]map[string]string), serverOptions: make(map[string]string), sessionOptions: make(map[string]string), bindings: make(map[string]string),
-		splitShell: make(map[string]string), silent: make(map[string]bool),
+		globalEnvironment: make(map[string]string),
+		splitShell:        make(map[string]string), silent: make(map[string]bool),
 		clients: make(map[string]*clientState), clientSessions: make(map[string]string), paneSessions: make(map[string]string),
 	}
 }
@@ -1940,6 +1942,73 @@ func (f *fakeClient) ServerOption(_ context.Context, key string) (string, bool, 
 	f.check("server-option")
 	value, exists := f.serverOptions[key]
 	return value, exists, nil
+}
+
+func (f *fakeClient) GlobalEnvironment(_ context.Context, name string) (string, bool, error) {
+	f.check("global-environment")
+	value, exists := f.globalEnvironment[name]
+	return value, exists, nil
+}
+
+func (f *fakeClient) SetGlobalEnvironment(_ context.Context, name, value string) error {
+	f.check("set-global-environment")
+	if !f.silent["set-global-environment"] {
+		f.globalEnvironment[name] = value
+	}
+	return nil
+}
+
+func TestEnsureMainSessionForwardsTmuxThroughGlobalWSLEnvUnderWSL(t *testing.T) {
+	wsl := func(key string) string {
+		if key == "WSL_DISTRO_NAME" {
+			return "Ubuntu-22.04"
+		}
+		return ""
+	}
+	t.Run("appends to an existing value", func(t *testing.T) {
+		fake := managedFake()
+		fake.globalEnvironment["WSLENV"] = "WT_SESSION:WT_PROFILE_ID:TMUX/u"
+		manager := testManager(fake)
+		manager.lookupEnv = wsl
+		if _, err := manager.EnsureMainSession(context.Background()); err != nil {
+			t.Fatalf("EnsureMainSession() error = %v", err)
+		}
+		if got := fake.globalEnvironment["WSLENV"]; got != "WT_SESSION:WT_PROFILE_ID:TMUX:TMUX_PANE" {
+			t.Fatalf("global WSLENV = %q", got)
+		}
+	})
+	t.Run("sets an unset value", func(t *testing.T) {
+		fake := managedFake()
+		manager := testManager(fake)
+		manager.lookupEnv = wsl
+		if _, err := manager.EnsureMainSession(context.Background()); err != nil {
+			t.Fatalf("EnsureMainSession() error = %v", err)
+		}
+		if got := fake.globalEnvironment["WSLENV"]; got != "TMUX:TMUX_PANE" {
+			t.Fatalf("global WSLENV = %q", got)
+		}
+	})
+	t.Run("silent mutation is reported", func(t *testing.T) {
+		fake := managedFake()
+		fake.silent["set-global-environment"] = true
+		manager := testManager(fake)
+		manager.lookupEnv = wsl
+		if _, err := manager.EnsureMainSession(context.Background()); err == nil {
+			t.Fatal("EnsureMainSession() accepted an unobservable WSLENV change")
+		}
+	})
+	t.Run("left alone outside WSL", func(t *testing.T) {
+		fake := managedFake()
+		fake.globalEnvironment["WSLENV"] = "KEEP"
+		manager := testManager(fake)
+		manager.lookupEnv = func(string) string { return "" }
+		if _, err := manager.EnsureMainSession(context.Background()); err != nil {
+			t.Fatalf("EnsureMainSession() error = %v", err)
+		}
+		if got := fake.globalEnvironment["WSLENV"]; got != "KEEP" {
+			t.Fatalf("global WSLENV = %q, want untouched", got)
+		}
+	})
 }
 
 func (f *fakeClient) BindKey(_ context.Context, table, key string, command ...string) error {

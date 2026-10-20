@@ -72,6 +72,8 @@ type tmuxClient interface {
 	BindKey(context.Context, string, string, ...string) error
 	KeyBinding(context.Context, string, string) (string, bool, error)
 	SessionOption(context.Context, string, string) (string, bool, error)
+	GlobalEnvironment(context.Context, string) (string, bool, error)
+	SetGlobalEnvironment(context.Context, string, string) error
 
 	CurrentWindow(context.Context, string) (string, error)
 	CurrentWindowName(context.Context, string) (string, error)

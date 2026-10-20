@@ -409,8 +409,9 @@ Under WSL, agents may also be Windows programs. A trailing `.exe` is ignored whe
 such as `opencode.exe` under `pwsh.exe`, is not in the terminal's foreground process group, which only
 holds the shell's interop stub, so when the foreground process is not an agent the pane's Windows
 processes (see Statistics) are searched for one, outermost first. Screen classification is the same
-for Windows and Linux agents. Panes whose Windows processes cannot be matched to the pane, because
-`TMUX` and `TMUX_PANE` are not forwarded, cannot report Windows agents started from a Windows shell.
+for Windows and Linux agents. Panes created before `op` forwarded `TMUX` and `TMUX_PANE` to Windows
+programs (see [Windows-to-WSL delegation](docs/windows-wsl.md)) cannot report Windows agents started from a
+Windows shell until the pane is restarted.
 
 ### Session Notifications
 

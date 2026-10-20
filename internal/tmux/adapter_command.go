@@ -444,6 +444,27 @@ func (c *commandClient) ServerOption(ctx context.Context, key string) (string, b
 	return c.option(ctx, []string{"show-options", "-qv", "-s", key})
 }
 
+// GlobalEnvironment reads one variable of the server's global environment,
+// which new panes inherit. Listing the whole environment avoids treating
+// tmux's "unknown variable" failure as a real error.
+func (c *commandClient) GlobalEnvironment(ctx context.Context, name string) (string, bool, error) {
+	output, err := c.raw.run(ctx, "show-environment", "-g")
+	if err != nil {
+		return "", false, err
+	}
+	for _, line := range strings.Split(output, "\n") {
+		if value, found := strings.CutPrefix(strings.TrimRight(line, "\r"), name+"="); found {
+			return value, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (c *commandClient) SetGlobalEnvironment(ctx context.Context, name, value string) error {
+	_, err := c.raw.runMutation(ctx, "set-environment", "-g", name, value)
+	return err
+}
+
 func (c *commandClient) BindKey(ctx context.Context, table, key string, command ...string) error {
 	args := []string{"bind-key", "-T", table, key}
 	_, err := c.raw.runMutation(ctx, append(args, command...)...)

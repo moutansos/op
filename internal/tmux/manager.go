@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/moutansos/op/internal/domain"
+	"github.com/moutansos/op/internal/wslproxy"
 )
 
 const (
@@ -192,6 +193,9 @@ func (m *Manager) EnsureMainSession(ctx context.Context) (result domain.EnsureMa
 		}
 	}
 	if err := m.enableFocusEvents(ctx); err != nil {
+		return result, err
+	}
+	if err := m.forwardTmuxToWindows(ctx); err != nil {
 		return result, err
 	}
 	if err := m.ensureTreeBinding(ctx); err != nil {
@@ -1052,6 +1056,33 @@ func (m *Manager) setAndVerifyWindowOption(ctx context.Context, windowID, key, v
 	actual, exists, err := m.client.WindowOption(ctx, windowID, key)
 	if err != nil || !exists || trimLineEndings(actual) != value {
 		return m.verification("tmux.set_window_option", "window option mutation was not observable for "+key, err)
+	}
+	return nil
+}
+
+// forwardTmuxToWindows makes the server's global WSLENV forward TMUX and
+// TMUX_PANE under WSL. New panes take their environment from the server, not
+// from the client that creates them, so without this a pane started directly
+// in a Windows shell such as pwsh.exe gives its Windows programs no pane
+// identity, and their processes cannot be attributed to the pane.
+func (m *Manager) forwardTmuxToWindows(ctx context.Context) error {
+	if m.lookupEnv("WSL_DISTRO_NAME") == "" && m.lookupEnv("WSL_INTEROP") == "" {
+		return nil
+	}
+	const key = "WSLENV"
+	current, _, err := m.client.GlobalEnvironment(ctx, key)
+	if err != nil {
+		return m.failure("tmux.ensure_main_session", "read the global WSLENV", err)
+	}
+	want := wslproxy.ForwardTmuxInWSLEnv(current)
+	if current == want {
+		return nil
+	}
+	if err := m.client.SetGlobalEnvironment(ctx, key, want); err != nil {
+		return m.failure("tmux.ensure_main_session", "forward TMUX through the global WSLENV", err)
+	}
+	if got, exists, err := m.client.GlobalEnvironment(ctx, key); err != nil || !exists || got != want {
+		return m.verification("tmux.ensure_main_session", "global WSLENV mutation was not observable", err)
 	}
 	return nil
 }
