@@ -259,7 +259,7 @@ func (m Model) renderStats(width, height int) string {
 		lines = hostComparisonLines(*m.stats.WindowsHost, host, width)
 	}
 	lines = append(lines, "")
-	lines = append(lines, m.processTreeLines(width)...)
+	lines = append(lines, m.processTreeLines(width, max(1, height-len(lines)))...)
 	return limitLines(lines, height)
 }
 

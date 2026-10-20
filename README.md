@@ -598,8 +598,9 @@ only as a small interop stub on the Linux side. Under WSL the sampler also finds
 process whose environment carries `TMUX` and `TMUX_PANE`, which Windows programs inherit when those
 variables are forwarded through `WSLENV` (see [Windows-to-WSL delegation](docs/windows-wsl.md)), and
 matches it to its pane by tmux server and pane ID. Each pane then lists its Windows processes in
-the tree below its own row, at most six per pane, and its CPU, memory, and process count include
-them. Windows process memory is the working set; CPU is a share of one logical CPU, like
+the tree below its own row, and its CPU, memory, and process count include them. Every Windows
+process is shown while the tree fits the panel; when it does not, the largest Windows trees are
+collapsed first, to no fewer than three rows plus a "… N more" row. Windows process memory is the working set; CPU is a share of one logical CPU, like
 Linux processes. Each process's environment is read once, when it is first seen, so a refresh costs
 about 10 milliseconds. The dashboard's own sampler appears under the pane running the dashboard.
 `GET /v1/stats` returns the trees as `windowsProcesses` on each pane.

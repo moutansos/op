@@ -1174,17 +1174,47 @@ func TestStatsPanelShowsWindowsProcessTreeUnderItsPane(t *testing.T) {
 		row("│        ├─ firefox.exe 6723", "-", "0B", "0s"),
 		row("│        ├─ firefox.exe 6724", "-", "0B", "0s"),
 		row("│        ├─ firefox.exe 6725", "-", "0B", "0s"),
-		"│     … 3 more Windows processes",
+		row("│        ├─ firefox.exe 6726", "-", "0B", "0s"),
+		row("│        ├─ firefox.exe 6727", "-", "0B", "0s"),
+		row("│        └─ firefox.exe 6728", "-", "0B", "0s"),
 		row("└─ 2:linux", "60.0%", "10.0MiB", ""),
 		row("   ├─ %2 zsh 1003", "60.0%", "10.0MiB", "1m1s"),
 		row("   └─ %3 sh 1004 [dead]", "-", "-", "-"),
 	}
-	got := model.processTreeLines(80)
-	for index := range got {
-		got[index] = ansi.Strip(got[index])
+	tree := func(height int) []string {
+		lines := model.processTreeLines(80, height)
+		for index := range lines {
+			lines[index] = ansi.Strip(lines[index])
+		}
+		return lines
 	}
-	if !slices.Equal(got, want) {
+	if got := tree(0); !slices.Equal(got, want) {
 		t.Fatalf("process tree:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if got := tree(len(want)); !slices.Equal(got, want) {
+		t.Fatalf("process tree with exactly enough rows was collapsed:\n%s", strings.Join(got, "\n"))
+	}
+
+	// Three rows short: the 9-process browser tree collapses to 5 rows plus a
+	// "more" row; the 3-process agent tree still fits whole.
+	collapsed := tree(len(want) - 3)
+	if len(collapsed) != len(want)-3 {
+		t.Fatalf("collapsed tree has %d rows, want %d:\n%s", len(collapsed), len(want)-3, strings.Join(collapsed, "\n"))
+	}
+	if !slices.Equal(collapsed[:7], want[:7]) || collapsed[14] != "│     … 4 more Windows processes" ||
+		!slices.Equal(collapsed[9:14], want[9:14]) {
+		t.Fatalf("collapsed tree:\n%s", strings.Join(collapsed, "\n"))
+	}
+
+	tiny := tree(5)
+	shown := 0
+	for _, line := range tiny {
+		if strings.Contains(line, "firefox.exe") {
+			shown++
+		}
+	}
+	if shown != minWindowsRowsPerPane || !slices.Contains(tiny, "│     … 6 more Windows processes") {
+		t.Fatalf("tree in a tiny panel shows %d browser rows, want the minimum %d:\n%s", shown, minWindowsRowsPerPane, strings.Join(tiny, "\n"))
 	}
 
 	for _, test := range []struct {
@@ -1192,7 +1222,7 @@ func TestStatsPanelShowsWindowsProcessTreeUnderItsPane(t *testing.T) {
 		hasMemory bool
 		hasUptime bool
 	}{{width: 45, hasMemory: true}, {width: 30}} {
-		lines := model.processTreeLines(test.width)
+		lines := model.processTreeLines(test.width, 0)
 		for _, line := range lines {
 			if ansi.StringWidth(line) > test.width {
 				t.Errorf("width %d: line is %d columns: %q", test.width, ansi.StringWidth(line), ansi.Strip(line))

@@ -9,9 +9,9 @@ import (
 	"github.com/moutansos/op/internal/domain"
 )
 
-// maxWindowsRowsPerPane keeps one pane with a large Windows tree, such as a
-// browser, from pushing every other pane out of the panel.
-const maxWindowsRowsPerPane = 6
+// minWindowsRowsPerPane is how far a pane's Windows tree is collapsed when the
+// panel cannot show every process.
+const minWindowsRowsPerPane = 3
 
 // hotCPUPercent marks a process using at least half of one CPU.
 const hotCPUPercent = 50
@@ -151,13 +151,15 @@ func (m Model) statsWindows() (string, []statsWindow) {
 // processTreeLines renders the session, its windows, their panes, and the
 // Windows processes started from each pane, with CPU, memory, and uptime
 // aligned in columns. Session, window, and pane rows show the totals below
-// them.
-func (m Model) processTreeLines(width int) []string {
+// them. Every Windows process is shown when the tree fits in height rows;
+// otherwise the largest Windows trees are collapsed first.
+func (m Model) processTreeLines(width, height int) []string {
 	columns := statsColumnsFor(width)
 	sessionName, windows := m.statsWindows()
 	if len(windows) == 0 {
 		return []string{"No tmux-owned processes"}
 	}
+	limit := windowsRowLimit(windows, height)
 
 	var session statsTotal
 	for _, window := range windows {
@@ -186,12 +188,49 @@ func (m Model) processTreeLines(width int) []string {
 		for paneIndex, pane := range window.panes {
 			paneBranch, paneTrunk := treeBranch(paneIndex == len(window.panes)-1)
 			lines = append(lines, columns.render(paneRow(windowTrunk+paneBranch, pane), width))
-			for _, child := range windowsProcessRows(windowTrunk+paneTrunk, pane.process.WindowsProcesses) {
+			for _, child := range windowsProcessRows(windowTrunk+paneTrunk, pane.process.WindowsProcesses, limit) {
 				lines = append(lines, columns.render(child, width))
 			}
 		}
 	}
 	return lines
+}
+
+// windowsRowLimit returns the most Windows processes each pane can show
+// while the tree fits in height rows, never fewer than minWindowsRowsPerPane.
+// A pane whose tree is cut also gets a "more" row. Height zero means
+// unlimited.
+func windowsRowLimit(windows []statsWindow, height int) int {
+	fixed, largest := 2, 0
+	var sizes []int
+	for _, window := range windows {
+		fixed += 1 + len(window.panes)
+		for _, pane := range window.panes {
+			if size := len(pane.process.WindowsProcesses); size > 0 {
+				sizes = append(sizes, size)
+				largest = max(largest, size)
+			}
+		}
+	}
+	if height <= 0 {
+		return largest
+	}
+	rows := func(limit int) int {
+		total := fixed
+		for _, size := range sizes {
+			if size > limit {
+				total += limit + 1
+			} else {
+				total += size
+			}
+		}
+		return total
+	}
+	limit := largest
+	for limit > minWindowsRowsPerPane && rows(limit) > height {
+		limit--
+	}
+	return limit
 }
 
 func paneRow(prefix string, pane statsPane) statsTreeRow {
@@ -217,10 +256,10 @@ func paneRow(prefix string, pane statsPane) statsTreeRow {
 
 // windowsProcessRows draws a pane's Windows processes, which arrive in
 // depth-first order with depths, as a tree below the pane.
-func windowsProcessRows(prefix string, processes []domain.WindowsProcessStats) []statsTreeRow {
+func windowsProcessRows(prefix string, processes []domain.WindowsProcessStats, limit int) []statsTreeRow {
 	shown := processes
-	if len(shown) > maxWindowsRowsPerPane {
-		shown = shown[:maxWindowsRowsPerPane]
+	if len(shown) > limit {
+		shown = shown[:limit]
 	}
 	rows := make([]statsTreeRow, 0, len(shown)+1)
 	// trunks[d] continues the branch at depth d for rows below it.
