@@ -579,6 +579,12 @@ panel is scoped to the managed tmux session: for every pane it walks the pane ro
 descendants, then aggregates CPU deltas and resident memory with pane/window identity, command,
 uptime, and live/dead state.
 
+Processes are shown as a tree in the same shape as the Tmux panel: session, windows, panes, and
+any Windows processes below a pane, with CPU, memory, and uptime in aligned columns. Session and
+window rows show the totals of everything below them, and CPU of 50% of one core or more is
+highlighted. Narrow panels drop the uptime column first, then memory. In the wide layout the
+process tree and the Tmux panel share the right column evenly.
+
 Under WSL, the host figures describe the WSL virtual machine, so the panel shows two aligned rows
 instead: `Windows` for the whole machine and `WSL` for the virtual machine inside it, each with CPU,
 used/total memory, and uptime, plus the logical CPU count for Windows and the load average for WSL.
@@ -591,9 +597,9 @@ Windows programs started from a pane, such as `pwsh.exe`, `opencode.exe`, or Win
 only as a small interop stub on the Linux side. Under WSL the sampler also finds every Windows
 process whose environment carries `TMUX` and `TMUX_PANE`, which Windows programs inherit when those
 variables are forwarded through `WSLENV` (see [Windows-to-WSL delegation](docs/windows-wsl.md)), and
-matches it to its pane by tmux server and pane ID. Each pane then lists its Windows processes as an
-indented tree below its own row, at most six per pane, and its CPU, memory, and process count
-include them. Windows process memory is the working set; CPU is a share of one logical CPU, like
+matches it to its pane by tmux server and pane ID. Each pane then lists its Windows processes in
+the tree below its own row, at most six per pane, and its CPU, memory, and process count include
+them. Windows process memory is the working set; CPU is a share of one logical CPU, like
 Linux processes. Each process's environment is read once, when it is first seen, so a refresh costs
 about 10 milliseconds. The dashboard's own sampler appears under the pane running the dashboard.
 `GET /v1/stats` returns the trees as `windowsProcesses` on each pane.

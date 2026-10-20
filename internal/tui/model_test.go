@@ -1042,7 +1042,7 @@ func TestMinimumSizeAndTabbedStatisticsRendering(t *testing.T) {
 		}},
 	}})
 	view := model.View()
-	for _, expected := range []string{"CPU  12.3%", "Memory 2.0GiB / 8.0GiB", "api", "pid 1234", "CPU -", "RSS 28.0MiB"} {
+	for _, expected := range []string{"CPU  12.3%", "Memory 2.0GiB / 8.0GiB", "api", "%2 op 1234", "28.0MiB", "2m0s"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("statistics view does not contain %q:\n%s", expected, view)
 		}
@@ -1143,44 +1143,65 @@ func TestStatsPanelShowsWindowsProcessTreeUnderItsPane(t *testing.T) {
 	}
 	model := testModel(&fakeService{})
 	model.haveStats = true
+	model.tmux = domain.TmuxSnapshot{Session: &domain.TmuxSession{Name: "code", Windows: []domain.TmuxWindow{
+		{Index: 0, Name: "agent", Panes: []domain.TmuxPane{{ID: "%14", PID: 1001, CurrentCommand: "pwsh.exe"}}},
+		{Index: 1, Name: "web", Panes: []domain.TmuxPane{{ID: "%1", PID: 1002, CurrentCommand: "pwsh.exe"}}},
+		{Index: 2, Name: "linux", Panes: []domain.TmuxPane{{ID: "%2", PID: 1003, CurrentCommand: "zsh"}, {ID: "%3", PID: 1004, CurrentCommand: "sh", Dead: true}}},
+	}}}
 	model.stats = domain.StatsSnapshot{Processes: []domain.PaneProcessStats{
-		{WindowName: "agent", PaneID: "%14", RootPID: 1001, Command: "pwsh.exe", CPUAvailable: true, CPUPercent: 12.9, ResidentBytes: 231 << 20, WindowsProcesses: children},
+		// tmux reports a Windows program's interop stub as "init".
+		{WindowName: "agent", PaneID: "%14", RootPID: 1001, Command: "init", ForegroundCommand: "pwsh.exe", CPUAvailable: true, CPUPercent: 12.9, ResidentBytes: 231 << 20, UptimeSeconds: 3600, WindowsProcesses: children},
 		{WindowName: "web", PaneID: "%1", RootPID: 1002, Command: "pwsh.exe", WindowsProcesses: browser},
-		{WindowName: "linux", PaneID: "%2", RootPID: 1003, Command: "zsh"},
+		{WindowName: "linux", PaneID: "%2", RootPID: 1003, Command: "zsh", CPUAvailable: true, CPUPercent: 60, ResidentBytes: 10 << 20, UptimeSeconds: 61},
 	}}
 
-	wide := strings.Split(ansi.Strip(model.renderStats(100, 60)), "\n")
-	find := func(lines []string, text string) int {
-		for index, line := range lines {
-			if strings.Contains(line, text) {
-				return index
-			}
-		}
-		t.Fatalf("no line contains %q:\n%s", text, strings.Join(lines, "\n"))
-		return -1
+	row := func(label, cpu, memory, uptime string) string {
+		return strings.TrimRight(fmt.Sprintf("%-55s %6s %9s %7s", label, cpu, memory, uptime), " ")
 	}
-	agent := find(wide, "agent")
-	if !strings.Contains(wide[agent+1], "20352") || !strings.Contains(wide[agent+1], "└ pwsh.exe") || !strings.Contains(wide[agent+1], "0.4%") {
-		t.Errorf("first Windows row = %q", wide[agent+1])
+	want := []string{
+		row("", "CPU", "MEM", "UP"),
+		row("code", "72.9%", "241.0MiB", ""),
+		row("├─ 0:agent", "12.9%", "231.0MiB", ""),
+		row("│  └─ %14 pwsh.exe 1001", "12.9%", "231.0MiB", "1h0m"),
+		row("│     └─ pwsh.exe 20352", "0.4%", "24.0MiB", "1h0m"),
+		row("│        └─ opencode.exe 32348", "-", "1.0MiB", "58m20s"),
+		row("│           └─ opencode.exe 30912", "12.5%", "206.0MiB", "58m20s"),
+		row("├─ 1:web", "-", "0B", ""),
+		row("│  └─ %1 pwsh.exe 1002", "-", "0B", "0s"),
+		row("│     └─ firefox.exe 6720", "-", "0B", "0s"),
+		row("│        ├─ firefox.exe 6721", "-", "0B", "0s"),
+		row("│        ├─ firefox.exe 6722", "-", "0B", "0s"),
+		row("│        ├─ firefox.exe 6723", "-", "0B", "0s"),
+		row("│        ├─ firefox.exe 6724", "-", "0B", "0s"),
+		row("│        ├─ firefox.exe 6725", "-", "0B", "0s"),
+		"│     … 3 more Windows processes",
+		row("└─ 2:linux", "60.0%", "10.0MiB", ""),
+		row("   ├─ %2 zsh 1003", "60.0%", "10.0MiB", "1m1s"),
+		row("   └─ %3 sh 1004 [dead]", "-", "-", "-"),
 	}
-	if !strings.Contains(wide[agent+2], " └ opencode.exe") || !strings.Contains(wide[agent+2], "-") {
-		t.Errorf("nested Windows row without CPU yet = %q", wide[agent+2])
+	got := model.processTreeLines(80)
+	for index := range got {
+		got[index] = ansi.Strip(got[index])
 	}
-	if !strings.Contains(wide[agent+3], "  └ opencode.exe") || !strings.Contains(wide[agent+3], "12.5%") || !strings.Contains(wide[agent+3], "206.0MiB") {
-		t.Errorf("deepest Windows row = %q", wide[agent+3])
-	}
-	web := find(wide, "web")
-	if more := wide[web+1+maxWindowsRowsPerPane]; !strings.Contains(more, "… 3 more Windows processes") {
-		t.Errorf("row after the cap = %q", more)
-	}
-	if linux := find(wide, "linux"); linux != web+maxWindowsRowsPerPane+2 {
-		t.Errorf("Linux-only pane is at row %d, want directly after the capped Windows rows", linux)
+	if !slices.Equal(got, want) {
+		t.Fatalf("process tree:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 
-	narrow := strings.Split(ansi.Strip(model.renderStats(60, 60)), "\n")
-	row := narrow[find(narrow, "agent %14")+2]
-	if !strings.Contains(row, "└ pwsh.exe 20352") || !strings.Contains(row, "CPU 0.4%") || !strings.Contains(row, "WS 24.0MiB") {
-		t.Errorf("narrow Windows row = %q", row)
+	for _, test := range []struct {
+		width     int
+		hasMemory bool
+		hasUptime bool
+	}{{width: 45, hasMemory: true}, {width: 30}} {
+		lines := model.processTreeLines(test.width)
+		for _, line := range lines {
+			if ansi.StringWidth(line) > test.width {
+				t.Errorf("width %d: line is %d columns: %q", test.width, ansi.StringWidth(line), ansi.Strip(line))
+			}
+		}
+		header := ansi.Strip(lines[0])
+		if strings.Contains(header, "MEM") != test.hasMemory || strings.Contains(header, "UP") != test.hasUptime || !strings.Contains(header, "CPU") {
+			t.Errorf("width %d: header = %q", test.width, header)
+		}
 	}
 }
 
@@ -1319,14 +1340,17 @@ func TestClickWaitingPaneSelectsIt(t *testing.T) {
 	service := &fakeService{}
 	model := loadDashboardTree(testModel(service))
 	view := model.View()
-	y := visibleLineIndex(view, "%46")
-	if y < 0 {
-		t.Fatalf("rendered dashboard missing waiting pane %%46:\n%s", view)
-	}
-	originX, _, _, _, ok := model.tmuxBodyOrigin()
+	originX, originY, _, _, ok := model.tmuxBodyOrigin()
 	if !ok {
 		t.Fatal("tmux tree origin was not found")
 	}
+	// The process tree above also lists %46, so search the tmux panel only.
+	lines := strings.Split(view, "\n")
+	y := visibleLineIndex(strings.Join(lines[originY:], "\n"), "%46")
+	if y < 0 {
+		t.Fatalf("rendered tmux tree missing waiting pane %%46:\n%s", view)
+	}
+	y += originY
 
 	model, cmd := updateTestModelWithCmd(model, tea.MouseMsg{
 		X: originX, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
