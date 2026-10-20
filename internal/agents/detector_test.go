@@ -665,6 +665,22 @@ func TestRuntimeWrappedAgentIsRecognized(t *testing.T) {
 	}
 }
 
+func TestWindowsExecutableNamesAreRecognized(t *testing.T) {
+	detector := newTestDetector(t)
+	for command, want := range map[string]string{"opencode.exe": "opencode", "Claude.EXE": "claude", "codex.exe": "codex"} {
+		pane := Pane{PaneID: "%10", Command: "init", Foreground: Foreground{PID: 1, Command: command, Args: []string{"/init", "/mnt/c/bin/" + command}, Valid: true}}
+		if name, ok := detector.Match(pane); !ok || name != want {
+			t.Errorf("Match(%q) = (%q, %v), want (%q, true)", command, name, ok, want)
+		}
+	}
+	for _, command := range []string{"pwsh.exe", "powershell.exe", "conhost.exe", "opencode.exe.bak"} {
+		pane := Pane{PaneID: "%10", Command: "init", Foreground: Foreground{PID: 1, Command: command, Valid: true}}
+		if name, ok := detector.Match(pane); ok {
+			t.Errorf("Match(%q) = %q, want no agent", command, name)
+		}
+	}
+}
+
 func TestPaneCommandIdentifiesAgentWithoutProcfs(t *testing.T) {
 	detector := newTestDetector(t)
 	pane := Pane{PaneID: "%9", Command: "claude"}

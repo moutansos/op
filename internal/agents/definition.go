@@ -261,11 +261,14 @@ func (d compiledDefinition) matches(identities []string) bool {
 // commandIdentities reduces the observed names for a pane's foreground process
 // to the lowercase tokens a definition may match. Runtimes are unwrapped one
 // level so an agent launched as "bun /usr/lib/opencode/index.js" is still
-// recognized when it has not renamed its own process.
+// recognized when it has not renamed its own process. A Windows ".exe"
+// suffix is dropped, so opencode.exe started through WSL interop matches
+// "opencode".
 func commandIdentities(comm string, argv []string, paneCommand string) []string {
 	identities := make([]string, 0, 4)
 	add := func(value string) {
 		value = strings.ToLower(strings.TrimSpace(value))
+		value = strings.TrimSuffix(value, ".exe")
 		value = strings.TrimSuffix(value, ".js")
 		value = strings.TrimSuffix(value, ".ts")
 		if value == "" {

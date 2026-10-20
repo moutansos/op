@@ -158,7 +158,7 @@ func (c *Collector) Collect(ctx context.Context, tmux domain.TmuxSnapshot) (doma
 					attachWindowsProcesses(&stats, windowsProcesses[windowsPaneKey{server: server, pane: pane.ID}])
 				}
 				processes = append(processes, stats)
-				foregrounds[pane.ID] = foreground
+				foregrounds[pane.ID] = c.agentForeground(pane, foreground, stats.WindowsProcesses)
 			}
 		}
 	}
@@ -215,6 +215,29 @@ func (c *Collector) collectAgents(
 		}
 	}
 	return c.detector.Classify(ctx, capturedAt, panes, c.capturer)
+}
+
+// agentForeground returns the process agent detection should treat as the
+// pane's foreground. A Windows program started from a Windows shell pane,
+// such as opencode.exe under pwsh.exe, is invisible to the terminal's
+// foreground process group, which only holds the shell's interop stub, so
+// the pane's Windows processes are searched for a recognized agent, outermost
+// first so that one agent run keeps one identity.
+func (c *Collector) agentForeground(pane domain.TmuxPane, foreground agents.Foreground, windows []domain.WindowsProcessStats) agents.Foreground {
+	if c.detector == nil || len(windows) == 0 {
+		return foreground
+	}
+	candidate := agents.Pane{PaneID: pane.ID, Command: pane.CurrentCommand, Dead: pane.Dead, Foreground: foreground}
+	if _, ok := c.detector.Match(candidate); ok {
+		return foreground
+	}
+	for _, process := range windows {
+		candidate.Foreground = agents.Foreground{PID: int32(process.PID), Command: process.Name, Args: []string{process.Name}, Valid: true}
+		if _, ok := c.detector.Match(candidate); ok {
+			return candidate.Foreground
+		}
+	}
+	return foreground
 }
 
 func (c *Collector) collectHost(ctx context.Context) (domain.HostStats, error) {

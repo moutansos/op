@@ -404,6 +404,14 @@ whether or not it just finished rendering.
 Agent detection is Linux-only. Elsewhere the pane's tmux-reported command still names the agent, but
 no foreground PID is resolved.
 
+Under WSL, agents may also be Windows programs. A trailing `.exe` is ignored when matching names, so
+`opencode.exe` run from a Linux shell matches `opencode`. An agent started from a Windows shell pane,
+such as `opencode.exe` under `pwsh.exe`, is not in the terminal's foreground process group, which only
+holds the shell's interop stub, so when the foreground process is not an agent the pane's Windows
+processes (see Statistics) are searched for one, outermost first. Screen classification is the same
+for Windows and Linux agents. Panes whose Windows processes cannot be matched to the pane, because
+`TMUX` and `TMUX_PANE` are not forwarded, cannot report Windows agents started from a Windows shell.
+
 ### Session Notifications
 
 `op serve` can watch OpenCode 1's `/global/event` SSE stream, OpenCode 2's `/api/event` stream, and
