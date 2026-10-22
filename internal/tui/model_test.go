@@ -1279,7 +1279,7 @@ func TestDashboardFitsTerminalWithLongRows(t *testing.T) {
 			MemoryUsed: 900 << 30, MemoryTotal: 1000 << 30, UptimeSeconds: 3473520,
 		},
 	}
-	for _, size := range [][2]int{{160, 45}, {150, 40}, {100, 40}, {80, 40}, {70, 40}, {120, 20}} {
+	for _, size := range [][2]int{{200, 45}, {160, 45}, {159, 45}, {150, 40}, {100, 40}, {80, 40}, {70, 40}, {120, 20}} {
 		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
 			model := loadProjectsForTest(testModel(&fakeService{}), projects...)
 			model = updateTestModel(model, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
@@ -1297,6 +1297,40 @@ func TestDashboardFitsTerminalWithLongRows(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestColumnsLayoutGivesEachTreeFullHeight(t *testing.T) {
+	model := loadDashboardTree(testModel(&fakeService{}))
+	model = updateTestModel(model, tea.WindowSizeMsg{Width: columnsWidth, Height: 40})
+
+	view := model.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) > 40 {
+		t.Fatalf("three-column view has %d lines for a 40-line terminal", len(lines))
+	}
+	titles := ansi.Strip(lines[1])
+	for _, title := range []string{"Projects", "System + Processes", "Tmux"} {
+		if !strings.Contains(titles, title) {
+			t.Fatalf("title row %q is missing %q; the panels are not side by side", titles, title)
+		}
+	}
+	// Both trees used to split one column, so the tmux panel started halfway
+	// down. It now starts with the other panels and runs to the bottom.
+	if got := visibleLineIndex(view, "code  attached"); got > 4 {
+		t.Fatalf("tmux tree starts on row %d, want it at the top of its column:\n%s", got, view)
+	}
+	if got := visibleLineIndex(view, "Actions / Status"); got < 30 {
+		t.Fatalf("status panel is on row %d, want it at the bottom of the project column", got)
+	}
+
+	originX, originY, width, height, ok := model.tmuxBodyOrigin()
+	if !ok || originY != 2 || height != 36 {
+		t.Fatalf("tmux body origin = (%d,%d) %dx%d ok=%v, want y=2 height=36", originX, originY, width, height, ok)
+	}
+	tmuxColumn := columnWidths(columnsWidth)[2]
+	if originX != columnsWidth-tmuxColumn+2 || width != tmuxColumn-4 {
+		t.Fatalf("tmux body is at x=%d width=%d, want the third %d-column panel", originX, width, tmuxColumn)
 	}
 }
 

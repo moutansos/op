@@ -17,6 +17,9 @@ const (
 	minimumHeight = 14
 	narrowWidth   = 72
 	wideWidth     = 110
+	// columnsWidth is where the two tree panels stop sharing a column. Each
+	// column stays at least as wide as the two-column layout's panels.
+	columnsWidth = 160
 )
 
 type section int
@@ -648,10 +651,14 @@ func (m *Model) closeForm() {
 func (m *Model) resizeChildren() {
 	width := max(20, m.width-4)
 	height := max(4, m.height-9)
-	if m.width >= wideWidth {
+	switch {
+	case m.width >= columnsWidth:
+		width = max(20, columnWidths(m.width)[0]-4)
+		height = max(4, m.height-9)
+	case m.width >= wideWidth:
 		width = max(20, (m.width-1)/2-4)
 		height = max(4, m.height-9)
-	} else if m.width >= narrowWidth {
+	case m.width >= narrowWidth:
 		height = max(4, m.height/2-5)
 	}
 	m.projects.SetSize(width, height)

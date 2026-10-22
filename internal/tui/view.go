@@ -27,7 +27,7 @@ var (
 	errorStyle         = lipgloss.NewStyle().Foreground(errorColor)
 )
 
-// View renders the dashboard for wide, stacked, tabbed, and minimum-size layouts.
+// View renders the dashboard for three-column, wide, stacked, tabbed, and minimum-size layouts.
 func (m Model) View() string {
 	if m.width < minimumWidth || m.height < minimumHeight {
 		return lipgloss.NewStyle().
@@ -41,6 +41,8 @@ func (m Model) View() string {
 	switch {
 	case m.height < 26:
 		dashboard = m.tabbedView()
+	case m.width >= columnsWidth:
+		dashboard = m.columnsView()
 	case m.width >= wideWidth:
 		dashboard = m.wideView()
 	case m.width >= narrowWidth:
@@ -63,6 +65,46 @@ func (m Model) openingView() string {
 		lipgloss.WithWhitespaceChars("·"),
 		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#D4E3D8", Dark: "#303E34"}),
 	)
+}
+
+// columnsView gives every panel its own column, so the process tree and the
+// tmux tree each get the full height instead of splitting one column.
+func (m Model) columnsView() string {
+	layout := m.columnsLayout()
+	projects := lipgloss.JoinVertical(lipgloss.Left,
+		m.projectPanel(layout.widths[0], layout.projectHeight),
+		m.statusPanel(layout.widths[0], layout.statusHeight),
+	)
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		projects, " ",
+		m.statsPanel(layout.widths[1], layout.contentHeight), " ",
+		m.tmuxPanel(layout.widths[2], layout.contentHeight),
+	)
+}
+
+type columnsLayout struct {
+	widths                       [3]int
+	contentHeight, projectHeight int
+	statusHeight                 int
+}
+
+func (m Model) columnsLayout() columnsLayout {
+	contentHeight := m.height - 1
+	return columnsLayout{
+		widths:        columnWidths(m.width),
+		contentHeight: contentHeight,
+		projectHeight: contentHeight - 5,
+		statusHeight:  5,
+	}
+}
+
+// columnWidths divides the terminal into projects, system, and tmux columns
+// with a one-column gap between them. Any leftover column goes to the project
+// list, which holds the longest names.
+func columnWidths(width int) [3]int {
+	inner := width - 2
+	column := inner / 3
+	return [3]int{inner - 2*column, column, column}
 }
 
 func (m Model) wideView() string {
@@ -226,6 +268,14 @@ func (m Model) tmuxBodyOrigin() (x, y, width, height int, ok bool) {
 			return 0, 0, 0, 0, false
 		}
 		return 2, lipgloss.Height(m.tabHeader()) + 2, max(1, m.width-4), max(1, m.height-9), true
+	case m.width >= columnsWidth:
+		layout := m.columnsLayout()
+		projects := lipgloss.JoinVertical(lipgloss.Left,
+			m.projectPanel(layout.widths[0], layout.projectHeight),
+			m.statusPanel(layout.widths[0], layout.statusHeight),
+		)
+		stats := m.statsPanel(layout.widths[1], layout.contentHeight)
+		return lipgloss.Width(projects) + lipgloss.Width(stats) + 4, 2, max(1, layout.widths[2]-4), max(1, layout.contentHeight-3), true
 	case m.width >= wideWidth:
 		leftWidth := (m.width - 1) / 2
 		rightWidth := m.width - leftWidth - 1
