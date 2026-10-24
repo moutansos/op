@@ -650,14 +650,16 @@ func (m *Model) closeForm() {
 
 func (m *Model) resizeChildren() {
 	width := max(20, m.width-4)
-	height := max(4, m.height-9)
+	statusHeight := m.statusPanelHeight(m.width)
+	height := max(4, m.height-4-statusHeight)
 	switch {
 	case m.width >= columnsWidth:
 		width = max(20, columnWidths(m.width)[0]-4)
-		height = max(4, m.height-9)
+		height = max(4, m.height-4-m.statusPanelHeight(columnWidths(m.width)[0]))
 	case m.width >= wideWidth:
-		width = max(20, (m.width-1)/2-4)
-		height = max(4, m.height-9)
+		leftWidth := (m.width - 1) / 2
+		width = max(20, leftWidth-4)
+		height = max(4, m.height-4-m.statusPanelHeight(leftWidth))
 	case m.width >= narrowWidth:
 		height = max(4, m.height/2-5)
 	}

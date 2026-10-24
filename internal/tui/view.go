@@ -90,11 +90,13 @@ type columnsLayout struct {
 
 func (m Model) columnsLayout() columnsLayout {
 	contentHeight := m.height - 1
+	widths := columnWidths(m.width)
+	statusHeight := m.statusPanelHeight(widths[0])
 	return columnsLayout{
-		widths:        columnWidths(m.width),
+		widths:        widths,
 		contentHeight: contentHeight,
-		projectHeight: contentHeight - 5,
-		statusHeight:  5,
+		projectHeight: contentHeight - statusHeight,
+		statusHeight:  statusHeight,
 	}
 }
 
@@ -111,12 +113,13 @@ func (m Model) wideView() string {
 	leftWidth := (m.width - 1) / 2
 	rightWidth := m.width - leftWidth - 1
 	contentHeight := m.height - 1
-	projectHeight := contentHeight - 5
+	statusHeight := m.statusPanelHeight(leftWidth)
+	projectHeight := contentHeight - statusHeight
 	statsHeight, tmuxHeight := wideRightHeights(contentHeight)
 
 	left := lipgloss.JoinVertical(lipgloss.Left,
 		m.projectPanel(leftWidth, projectHeight),
-		m.statusPanel(leftWidth, 5),
+		m.statusPanel(leftWidth, statusHeight),
 	)
 	right := lipgloss.JoinVertical(lipgloss.Left,
 		m.statsPanel(rightWidth, statsHeight),
@@ -133,15 +136,16 @@ func wideRightHeights(contentHeight int) (stats, tmux int) {
 }
 
 func (m Model) stackedView() string {
+	statusHeight := m.statusPanelHeight(m.width)
 	projectHeight := max(7, m.height/2)
-	remaining := m.height - projectHeight - 5
+	remaining := m.height - projectHeight - statusHeight
 	tmuxHeight := max(6, (remaining*3)/5)
 	statsHeight := remaining - tmuxHeight
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.projectPanel(m.width, projectHeight),
 		m.statsPanel(m.width, statsHeight),
 		m.tmuxPanel(m.width, tmuxHeight),
-		m.statusPanel(m.width, 5),
+		m.statusPanel(m.width, statusHeight),
 	)
 }
 
@@ -159,7 +163,8 @@ func (m Model) tabHeader() string {
 
 func (m Model) tabbedView() string {
 	header := m.tabHeader()
-	contentHeight := m.height - 6
+	statusHeight := m.statusPanelHeight(m.width)
+	contentHeight := m.height - 1 - statusHeight
 	var content string
 	switch m.section {
 	case statsSection:
@@ -169,7 +174,7 @@ func (m Model) tabbedView() string {
 	default:
 		content = m.projectPanel(m.width, contentHeight)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, header, content, m.statusPanel(m.width, 5))
+	return lipgloss.JoinVertical(lipgloss.Left, header, content, m.statusPanel(m.width, statusHeight))
 }
 
 func (m Model) projectPanel(width, height int) string {
@@ -231,6 +236,43 @@ func (m Model) statusPanel(width, height int) string {
 	return renderPanel(m.statusPanelTitle(), status+"\n"+help, width, height, false, nil)
 }
 
+// statusPanelHeight is the bordered height of the status panel. The help line
+// is wider than the left column on most displays, and a fixed height clips the
+// wrapped line — and the bottom border with it — through MaxHeight.
+func (m Model) statusPanelHeight(width int) int {
+	return panelHeight(m.statusPanelBody(), width)
+}
+
+func (m Model) statusPanelBody() string {
+	status := m.status
+	if status == "" {
+		status = "Ready"
+	}
+	if m.operation != "" {
+		status = "[busy] " + status
+	}
+	if waiting := m.waitingAgentSummary(); waiting != "" {
+		status += "   " + waiting
+	}
+	help := "enter default   a open with   w worktree   / filter   n new   c clone   r refresh   q quit"
+	if m.section == tmuxSection {
+		help = "enter select pane   j/k move   click pane   tab sections   r refresh   q quit"
+	}
+	return ansi.Strip(m.statusPanelTitle()) + "\n" + status + "\n" + help
+}
+
+// panelHeight is how tall a bordered, padded panel must be to show content
+// without MaxHeight cutting off its bottom border. Width is the panel width,
+// border included, and content is measured by visible columns.
+func panelHeight(content string, width int) int {
+	inner := max(1, width-4)
+	lines := 0
+	for _, line := range strings.Split(content, "\n") {
+		lines += max(1, (ansi.StringWidth(line)+inner-1)/inner)
+	}
+	return lines + 2
+}
+
 func (m Model) statusPanelTitle() string {
 	if m.parent.State == "" {
 		return "Actions / Status"
@@ -267,7 +309,7 @@ func (m Model) tmuxBodyOrigin() (x, y, width, height int, ok bool) {
 		if m.section != tmuxSection {
 			return 0, 0, 0, 0, false
 		}
-		return 2, lipgloss.Height(m.tabHeader()) + 2, max(1, m.width-4), max(1, m.height-9), true
+		return 2, lipgloss.Height(m.tabHeader()) + 2, max(1, m.width-4), max(1, m.height-4-m.statusPanelHeight(m.width)), true
 	case m.width >= columnsWidth:
 		layout := m.columnsLayout()
 		projects := lipgloss.JoinVertical(lipgloss.Left,
@@ -280,17 +322,18 @@ func (m Model) tmuxBodyOrigin() (x, y, width, height int, ok bool) {
 		leftWidth := (m.width - 1) / 2
 		rightWidth := m.width - leftWidth - 1
 		contentHeight := m.height - 1
-		projectHeight := contentHeight - 5
+		statusHeight := m.statusPanelHeight(leftWidth)
+		projectHeight := contentHeight - statusHeight
 		statsHeight, tmuxHeight := wideRightHeights(contentHeight)
 		left := lipgloss.JoinVertical(lipgloss.Left,
 			m.projectPanel(leftWidth, projectHeight),
-			m.statusPanel(leftWidth, 5),
+			m.statusPanel(leftWidth, statusHeight),
 		)
 		stats := m.statsPanel(rightWidth, statsHeight)
 		return lipgloss.Width(left) + 3, lipgloss.Height(stats) + 2, max(1, rightWidth-4), max(1, tmuxHeight-3), true
 	default:
 		projectHeight := max(7, m.height/2)
-		remaining := m.height - projectHeight - 5
+		remaining := m.height - projectHeight - m.statusPanelHeight(m.width)
 		tmuxHeight := max(6, (remaining*3)/5)
 		statsHeight := remaining - tmuxHeight
 		projects := m.projectPanel(m.width, projectHeight)

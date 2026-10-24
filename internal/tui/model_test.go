@@ -331,8 +331,8 @@ func TestFilteringFocusAndResize(t *testing.T) {
 		t.Fatalf("focused section = %d, want stats", model.section)
 	}
 	model = updateTestModel(model, tea.WindowSizeMsg{Width: 60, Height: 24})
-	if model.projects.Width() != 56 || model.projects.Height() != 15 {
-		t.Fatalf("narrow list size = %dx%d, want 56x15", model.projects.Width(), model.projects.Height())
+	if model.projects.Width() != 56 || model.projects.Height() != 14 {
+		t.Fatalf("narrow list size = %dx%d, want 56x14", model.projects.Width(), model.projects.Height())
 	}
 	if view := model.View(); !strings.Contains(view, "1 Projects") || !strings.Contains(view, "System + Processes") {
 		t.Fatalf("narrow view did not render tabs and focused system panel:\n%s", view)
@@ -1331,6 +1331,28 @@ func TestColumnsLayoutGivesEachTreeFullHeight(t *testing.T) {
 	tmuxColumn := columnWidths(columnsWidth)[2]
 	if originX != columnsWidth-tmuxColumn+2 || width != tmuxColumn-4 {
 		t.Fatalf("tmux body is at x=%d width=%d, want the third %d-column panel", originX, width, tmuxColumn)
+	}
+}
+
+func TestStatusPanelKeepsBottomBorderWhenHelpWraps(t *testing.T) {
+	model := loadProjectsForTest(testModel(&fakeService{}),
+		domain.Project{ID: "one", Name: "api-server", Path: "/repos/api-server"},
+	)
+	// The left column is narrower than the help line on most displays, so the
+	// status panel used to spend its last row on the wrapped help and lose its
+	// bottom border to MaxHeight.
+	for _, size := range [][2]int{{160, 40}, {180, 40}, {200, 45}, {120, 40}, {80, 40}, {60, 24}} {
+		t.Run(fmt.Sprintf("%dx%d", size[0], size[1]), func(t *testing.T) {
+			model = updateTestModel(model, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			lines := strings.Split(model.View(), "\n")
+			if len(lines) > size[1] {
+				t.Fatalf("view has %d lines for a %d-line terminal", len(lines), size[1])
+			}
+			last := ansi.Strip(lines[len(lines)-1])
+			if !strings.Contains(last, "╯") && !strings.Contains(last, "┘") {
+				t.Fatalf("last row has no bottom border: %q", last)
+			}
+		})
 	}
 }
 
