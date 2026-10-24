@@ -1,15 +1,155 @@
 {
-    "repoDirectory": "~/source/repos",
-    "wslRepoDirectory": "/mnt/c/Users/bbrougher/source/repos",
-    "isServer": false,
-    "preferedShell": "zsh",
-    "customEntries": [
-        {
-            "name": "<< nvim-config >>",
-            "paths": {
-                "win": "$env:LOCALAPPDATA/nvim",
-                "linux": "~/.config/nvim"
-            }
-        }
+  "repoDirectory": "~/source/repos",
+  "preferredShell": "zsh",
+  "tmux": {
+    "session": "code",
+    "dashboardWindow": "op",
+    "socket": "",
+    "shellPaneRows": 20,
+    "defaultProfile": "nvim"
+  },
+  "stats": {
+    "refreshInterval": "2s",
+    "tmuxRefreshInterval": "5s",
+    "gitRefreshInterval": "60s"
+  },
+  "agents": {
+    "enabled": true,
+    "quietAfter": "1.2s",
+    "idleAfter": "90s",
+    "scanLines": 24,
+    "definitions": [
+      {
+        "name": "opencode",
+        "match": ["opencode", "oc", "oca"],
+        "promptPatterns": ["(?i)ctrl\\+p\\s+commands"]
+      },
+      {
+        "name": "opencode2",
+        "match": ["opencode2"],
+        "promptPatterns": ["(?i)ctrl\\+p\\s+commands"]
+      },
+      {
+        "name": "claude",
+        "match": ["claude"],
+        "promptPatterns": ["(?i)shift\\+tab\\s+to\\s+cycle"],
+        "approvalPatterns": ["(?i)\\bdo you want to proceed\\b"]
+      }
     ]
+  },
+  "notifications": {
+    "enabled": false,
+    "debounce": "3s",
+    "ignoreDirectories": ["/tmp"],
+    "opencode": {
+      "baseUrl": "http://127.0.0.1:4096",
+      "desktopBaseUrl": "https://opencode.example.com",
+      "username": "",
+      "password": ""
+    },
+    "opencode2": {
+      "enabled": false,
+      "baseUrl": "",
+      "desktopBaseUrl": "",
+      "password": ""
+    },
+    "ingest": {
+      "enabled": false
+    },
+    "providers": [
+      {
+        "type": "discord",
+        "enabled": false,
+        "webhookUrl": "https://discord.com/api/webhooks/..."
+      },
+      {
+        "type": "msteams",
+        "enabled": false,
+        "webhookUrl": "https://outlook.office.com/webhook/..."
+      },
+      {
+        "type": "webhook",
+        "enabled": false,
+        "url": "https://example.com/notify",
+        "method": "POST",
+        "headers": {
+          "Authorization": "Bearer secret"
+        }
+      },
+      {
+        "type": "parent",
+        "enabled": false,
+        "url": "http://central.example:8787",
+        "token": "optional-shared-secret",
+        "maxHops": 8,
+        "timeout": "10s"
+      }
+    ]
+  },
+  "server": {
+    "enabled": false,
+    "token": "",
+    "listen": "127.0.0.1:8787",
+    "tokenFile": "~/.config/op/server-token",
+    "tlsCertFile": "",
+    "tlsKeyFile": "",
+    "state": {
+      "instanceId": "",
+      "parentUrl": "",
+      "parentEventsUrl": "",
+      "refreshInterval": "2s",
+      "heartbeatInterval": "10s",
+      "staleAfter": "1m"
+    }
+  },
+  "actions": {
+    "guiEditors": false
+  },
+  "projectOpeners": [
+    {
+      "id": "nvim",
+      "name": "Neovim in tmux",
+      "mode": "tmux",
+      "command": "nvim ."
+    },
+    {
+      "id": "vscode",
+      "name": "VS Code",
+      "mode": "gui",
+      "command": "code {{path}}"
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode in tmux",
+      "mode": "tmux",
+      "command": "opencode ."
+    },
+    {
+      "id": "opencode2",
+      "name": "OpenCode 2 in tmux",
+      "mode": "tmux",
+      "command": "opencode2 ."
+    }
+  ],
+  "customEntries": [
+    {
+      "name": "nvim-config",
+      "paths": {
+        "win": "$env:LOCALAPPDATA/nvim",
+        "linux": "~/.config/nvim"
+      }
+    }
+  ],
+  "customCommands": [
+    {
+      "name": "Open opencode",
+      "command": "cd {{oproot}} && opencode {{path}}",
+      "runInPreferredShell": true
+    },
+    {
+      "name": "Open opencode2",
+      "command": "cd {{oproot}} && opencode2 {{path}}",
+      "runInPreferredShell": true
+    }
+  ]
 }

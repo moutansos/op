@@ -1,0 +1,13 @@
+{
+  "name": "oc-notifier",
+  "version": "0.1.0",
+  "description": "Forward Codex CLI idle (Stop) and permission events to oc-notifier for Discord, Teams, and webhook delivery.",
+  "author": {
+    "name": "mSyke"
+  },
+  "homepage": "https://code.msyke.dev/mSyke/oc-notifier",
+  "repository": "https://code.msyke.dev/mSyke/oc-notifier",
+  "license": "MIT",
+  "keywords": ["notifications", "discord", "teams", "webhook", "idle", "hooks", "codex"],
+  "hooks": "./hooks/hooks.json"
+}

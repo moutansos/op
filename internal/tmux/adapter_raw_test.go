@@ -1,0 +1,279 @@
+//go:build !windows
+
+package tmux
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/moutansos/op/internal/domain"
+)
+
+func TestRawExactWindowExistenceUsesExplicitSocketAndExactID(t *testing.T) {
+	root := t.TempDir()
+	arguments := filepath.Join(root, "arguments")
+	executable := writeExecutable(t, root, "tmux-query", "#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+arguments+"'\nprintf '@1\\n@12\\n'")
+	raw := rawTmux{executable: executable, socket: filepath.Join(root, "tmux.sock")}
+
+	exists, err := raw.exactIDExists(context.Background(), "@1", "list-windows", "-a", "-F", "#{window_id}")
+	if err != nil || !exists {
+		t.Fatalf("exact window @1 existence = %v, %v", exists, err)
+	}
+	exists, err = raw.exactIDExists(context.Background(), "@2", "list-windows", "-a", "-F", "#{window_id}")
+	if err != nil || exists {
+		t.Fatalf("exact window @2 existence = %v, %v", exists, err)
+	}
+	data, err := os.ReadFile(arguments)
+	if err != nil {
+		t.Fatalf("read query arguments: %v", err)
+	}
+	want := strings.Join([]string{"-S", raw.socket, "list-windows", "-a", "-F", "#{window_id}", ""}, "\n")
+	if string(data) != want {
+		t.Fatalf("raw query arguments = %q, want %q", data, want)
+	}
+}
+
+func TestRawExactWindowExistenceStopsStalledCommandOnContextDeadline(t *testing.T) {
+	root := t.TempDir()
+	executable := writeExecutable(t, root, "tmux-stall", "#!/bin/sh\nexec sleep 30")
+	raw := rawTmux{executable: executable, socket: filepath.Join(root, "tmux.sock")}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+
+	_, err := raw.exactIDExists(ctx, "@1", "list-windows", "-a", "-F", "#{window_id}")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stalled query error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("stalled query exceeded context bound: %v", elapsed)
+	}
+}
+
+func TestRawRunCancellationKillsProcessTreeAndPreventsLateMutation(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "mutated")
+	executable := writeExecutable(t, root, "tmux-late-mutation", "#!/bin/sh\nsleep 0.2\nprintf changed > '"+marker+"'\n")
+	raw := rawTmux{executable: executable}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := raw.run(ctx, "new-window")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stalled mutation error = %v, want deadline exceeded", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("mutation completed after cancellation: %v", err)
+	}
+}
+
+func TestRawRunReturnsOutputWhenWaitDelayExpires(t *testing.T) {
+	root := t.TempDir()
+	executable := writeExecutable(t, root, "tmux-hold-stdout", "#!/bin/sh\n(sleep 1 &)\nprintf '%s\\n' '%32'\n")
+	raw := rawTmux{executable: executable}
+	started := time.Now()
+
+	output, err := raw.run(context.Background(), "list-panes", "-t", "@14", "-F", "#{pane_id}")
+	if err != nil {
+		t.Fatalf("held-stdout query error = %v, want captured output", err)
+	}
+	if got := strings.TrimSpace(output); got != "%32" {
+		t.Fatalf("held-stdout output = %q, want %q", got, "%32")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("held-stdout query exceeded WaitDelay bound: %v", elapsed)
+	}
+}
+
+func TestRawRunIncludesStderr(t *testing.T) {
+	root := t.TempDir()
+	executable := writeExecutable(t, root, "tmux-error", "#!/bin/sh\nprintf 'backend detail\\n' >&2\nexit 7\n")
+	_, err := (rawTmux{executable: executable}).run(context.Background(), "list-sessions")
+	if err == nil || !strings.Contains(err.Error(), "backend detail") {
+		t.Fatalf("raw error = %v, want stderr detail", err)
+	}
+}
+
+func TestRawSingleFieldPreservesDelimiterWhitespaceAndEmbeddedNewline(t *testing.T) {
+	root := t.TempDir()
+	executable := writeExecutable(t, root, "tmux-field", "#!/bin/sh\nprintf '  path-:-with\\ttab\\nline two\\n'\n")
+	value, err := (rawTmux{executable: executable}).field(context.Background(), "%1", "pane_current_path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "  path-:-with\ttab\nline two"; value != want {
+		t.Fatalf("single field = %q, want %q", value, want)
+	}
+}
+
+func TestRawPaneFieldUsesFilteredListPanes(t *testing.T) {
+	root := t.TempDir()
+	arguments := filepath.Join(root, "arguments")
+	executable := writeExecutable(t, root, "tmux-pane-field", "#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+arguments+"'\nprintf '3\\n'")
+	value, err := (rawTmux{executable: executable, socket: filepath.Join(root, "tmux.sock")}).intField(context.Background(), "%15", "pane_index", 0, 100)
+	if err != nil || value != 3 {
+		t.Fatalf("pane field = %d, %v", value, err)
+	}
+	data, err := os.ReadFile(arguments)
+	if err != nil {
+		t.Fatalf("read query arguments: %v", err)
+	}
+	want := strings.Join([]string{"-S", filepath.Join(root, "tmux.sock"), "list-panes", "-t", "%15", "-f", "#{==:#{pane_id},%15}", "-F", "#{pane_index}", ""}, "\n")
+	if string(data) != want {
+		t.Fatalf("pane field arguments = %q, want %q", data, want)
+	}
+}
+
+// Per-field pane queries used to race with pane death: a pane that exited
+// between the identity listing and a later field query returned empty output,
+// and the whole snapshot failed with `tmux returned invalid pane_dead ""`.
+// One batched query keeps every pane record internally consistent.
+func TestListPanesReadsWholeWindowInSingleTmuxCall(t *testing.T) {
+	root := t.TempDir()
+	calls := filepath.Join(root, "calls")
+	arguments := filepath.Join(root, "arguments")
+	// The pane list shrinks on every call, so any follow-up query would observe
+	// a vanished pane and fail.
+	script := "#!/bin/sh\n" +
+		"printf 'x' >> '" + calls + "'\n" +
+		"if [ -s '" + arguments + "' ]; then printf '' ; exit 0; fi\n" +
+		"printf '%s\\n' \"$@\" > '" + arguments + "'\n" +
+		"printf '%%4\\t0\\t812\\t1\\t0\\t1\\t0\\t24\\tnvim\\t/home/ben/src\\n'\n" +
+		"printf '%%5\\t1\\t813\\t0\\t0\\t0\\t1\\t10\\tsh\\t/tmp\\n'\n"
+	executable := writeExecutable(t, root, "tmux-panes", script)
+	client := &commandClient{raw: rawTmux{executable: executable, socket: filepath.Join(root, "tmux.sock")}}
+
+	panes, err := client.ListPanes(context.Background(), "@6")
+	if err != nil {
+		t.Fatalf("ListPanes() error = %v", err)
+	}
+	if len(panes) != 2 || panes[0].ID != "%4" || panes[1].ID != "%5" || panes[1].CurrentPath != "/tmp" {
+		t.Fatalf("panes = %+v", panes)
+	}
+	if panes[0].PID != 812 || !panes[0].Active || panes[0].Dead || !panes[0].AtTop || panes[0].Height != 24 {
+		t.Fatalf("first pane = %+v", panes[0])
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatalf("read call log: %v", err)
+	}
+	if string(data) != "x" {
+		t.Fatalf("tmux invocations = %d, want 1", len(data))
+	}
+	data, err = os.ReadFile(arguments)
+	if err != nil {
+		t.Fatalf("read query arguments: %v", err)
+	}
+	want := strings.Join(append([]string{"-S", filepath.Join(root, "tmux.sock")}, append(paneRecordArgs("@6"), "")...), "\n")
+	if string(data) != want {
+		t.Fatalf("pane list arguments = %q, want %q", data, want)
+	}
+}
+
+func TestRawWindowFieldUsesDisplayMessage(t *testing.T) {
+	root := t.TempDir()
+	arguments := filepath.Join(root, "arguments")
+	executable := writeExecutable(t, root, "tmux-window-field", "#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+arguments+"'\nprintf '2\\n'")
+	value, err := (rawTmux{executable: executable}).intField(context.Background(), "@6", "window_index", 0, 100)
+	if err != nil || value != 2 {
+		t.Fatalf("window field = %d, %v", value, err)
+	}
+	data, err := os.ReadFile(arguments)
+	if err != nil {
+		t.Fatalf("read query arguments: %v", err)
+	}
+	want := strings.Join([]string{"display-message", "-p", "-t", "@6", "#{window_index}", ""}, "\n")
+	if string(data) != want {
+		t.Fatalf("window field arguments = %q, want %q", data, want)
+	}
+}
+
+func TestFieldArgs(t *testing.T) {
+	got := strings.Join(fieldArgs("%15", "pane_index"), " ")
+	want := "list-panes -t %15 -f #{==:#{pane_id},%15} -F #{pane_index}"
+	if got != want {
+		t.Fatalf("fieldArgs(pane) = %q, want %q", got, want)
+	}
+	got = strings.Join(fieldArgs("@6", "window_index"), " ")
+	want = "display-message -p -t @6 #{window_index}"
+	if got != want {
+		t.Fatalf("fieldArgs(window) = %q, want %q", got, want)
+	}
+}
+
+func TestNewStopsStalledInitializationWithTypedDeadline(t *testing.T) {
+	root := t.TempDir()
+	writeExecutable(t, root, "tmux", "#!/bin/sh\nexec /bin/sleep 30\n")
+	t.Setenv("PATH", root)
+	config := testConfig()
+	config.Socket = filepath.Join(root, "tmux.sock")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+
+	_, err := New(ctx, config)
+	if !errors.Is(err, context.DeadlineExceeded) || !domain.IsCode(err, domain.ErrorCodeTimeout) {
+		t.Fatalf("New() error = %v, want typed deadline", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("New() exceeded context bound: %v", elapsed)
+	}
+}
+
+func TestRawInteractiveCancellationReturnsDeadline(t *testing.T) {
+	root := t.TempDir()
+	executable := writeExecutable(t, root, "tmux-attach", "#!/bin/sh\ntrap 'exit 0' TERM\nexec 2>/dev/null\nwhile :; do sleep 1; done\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+
+	err := (rawTmux{executable: executable}).runInteractive(ctx, io.Discard, new(bytes.Buffer), "attach-session", "-t", "$1")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("interactive error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("interactive cancellation took %v", elapsed)
+	}
+}
+
+func TestKeyBindingQueriesByKeyBecauseTableAndKeyTogetherAreSilent(t *testing.T) {
+	root := t.TempDir()
+	arguments := filepath.Join(root, "arguments")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > '" + arguments + "'\n" +
+		"if [ \"$1\" = \"-S\" ]; then shift 2; fi\n" +
+		"if [ \"$1\" = \"list-keys\" ] && [ \"$2\" = \"-T\" ]; then exit 0; fi\n" +
+		"printf '%s\\n' 'bind-key    -T copy-mode    T                         command-prompt -1 -p \"(jump to backward)\" { send-keys -X jump-to-backward -- \"%%\" }'\n" +
+		"printf '%s\\n' 'bind-key    -T prefix       T                         display-popup -E -h \"80%\" -w \"80%\" \"op tree\"'\n"
+	client := &commandClient{raw: rawTmux{executable: writeExecutable(t, root, "tmux-list-keys", script), socket: filepath.Join(root, "tmux.sock")}}
+
+	value, exists, err := client.KeyBinding(context.Background(), "prefix", "T")
+	if err != nil || !exists || !strings.Contains(value, `display-popup -E -h "80%" -w "80%" "op tree"`) {
+		t.Fatalf("KeyBinding() = %q, %v, %v", value, exists, err)
+	}
+	data, err := os.ReadFile(arguments)
+	if err != nil {
+		t.Fatalf("read query arguments: %v", err)
+	}
+	want := strings.Join([]string{"-S", filepath.Join(root, "tmux.sock"), "list-keys", "T", ""}, "\n")
+	if string(data) != want {
+		t.Fatalf("list-keys arguments = %q, want %q", data, want)
+	}
+}
+
+func writeExecutable(t *testing.T, directory, name, contents string) string {
+	t.Helper()
+	path := filepath.Join(directory, name)
+	if err := os.WriteFile(path, []byte(contents), 0o700); err != nil {
+		t.Fatalf("write test executable: %v", err)
+	}
+	return path
+}

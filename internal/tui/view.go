@@ -1,0 +1,506 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/moutansos/op/internal/domain"
+)
+
+var (
+	accentColor = lipgloss.AdaptiveColor{Light: "#18794E", Dark: "#86EFAC"}
+	branchColor = lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#7DB7FF"}
+	cleanColor  = lipgloss.AdaptiveColor{Light: "#1F8A3B", Dark: "#5EDC84"}
+	dirtyColor  = lipgloss.AdaptiveColor{Light: "#C96A00", Dark: "#FFB24A"}
+	dimColor    = lipgloss.AdaptiveColor{Light: "#666666", Dark: "#8A8A8A"}
+	errorColor  = lipgloss.AdaptiveColor{Light: "#A51D2D", Dark: "#FF6B7A"}
+	warnColor   = lipgloss.AdaptiveColor{Light: "#C96A00", Dark: "#FFB24A"}
+
+	titleStyle         = lipgloss.NewStyle().Bold(true).Foreground(accentColor)
+	branchStyle        = lipgloss.NewStyle().Foreground(branchColor)
+	projectBranchStyle = branchStyle.Copy()
+	projectCleanStyle  = lipgloss.NewStyle().Foreground(cleanColor)
+	projectDirtyStyle  = lipgloss.NewStyle().Foreground(dirtyColor)
+	dimStyle           = lipgloss.NewStyle().Foreground(dimColor)
+	errorStyle         = lipgloss.NewStyle().Foreground(errorColor)
+)
+
+// View renders the dashboard for three-column, wide, stacked, tabbed, and minimum-size layouts.
+func (m Model) View() string {
+	if m.width < minimumWidth || m.height < minimumHeight {
+		return lipgloss.NewStyle().
+			Width(max(1, m.width)).
+			Height(max(1, m.height)).
+			Align(lipgloss.Center, lipgloss.Center).
+			Render(fmt.Sprintf("op dashboard needs at least %dx%d\ncurrent terminal: %dx%d", minimumWidth, minimumHeight, m.width, m.height))
+	}
+
+	var dashboard string
+	switch {
+	case m.height < 26:
+		dashboard = m.tabbedView()
+	case m.width >= columnsWidth:
+		dashboard = m.columnsView()
+	case m.width >= wideWidth:
+		dashboard = m.wideView()
+	case m.width >= narrowWidth:
+		dashboard = m.stackedView()
+	default:
+		dashboard = m.tabbedView()
+	}
+	if m.overlay != noOverlay {
+		return m.overlayView(dashboard)
+	}
+	if m.operation == "open" {
+		return m.openingView()
+	}
+	return dashboard
+}
+
+func (m Model) openingView() string {
+	box := renderPanel("Opening Project", m.status, min(44, m.width-6), 0, true, nil)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box,
+		lipgloss.WithWhitespaceChars("·"),
+		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#D4E3D8", Dark: "#303E34"}),
+	)
+}
+
+// columnsView gives every panel its own column, so the process tree and the
+// tmux tree each get the full height instead of splitting one column.
+func (m Model) columnsView() string {
+	layout := m.columnsLayout()
+	projects := lipgloss.JoinVertical(lipgloss.Left,
+		m.projectPanel(layout.widths[0], layout.projectHeight),
+		m.statusPanel(layout.widths[0], layout.statusHeight),
+	)
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		projects, " ",
+		m.statsPanel(layout.widths[1], layout.contentHeight), " ",
+		m.tmuxPanel(layout.widths[2], layout.contentHeight),
+	)
+}
+
+type columnsLayout struct {
+	widths                       [3]int
+	contentHeight, projectHeight int
+	statusHeight                 int
+}
+
+func (m Model) columnsLayout() columnsLayout {
+	contentHeight := m.height - 1
+	return columnsLayout{
+		widths:        columnWidths(m.width),
+		contentHeight: contentHeight,
+		projectHeight: contentHeight - 5,
+		statusHeight:  5,
+	}
+}
+
+// columnWidths divides the terminal into projects, system, and tmux columns
+// with a one-column gap between them. Any leftover column goes to the project
+// list, which holds the longest names.
+func columnWidths(width int) [3]int {
+	inner := width - 2
+	column := inner / 3
+	return [3]int{inner - 2*column, column, column}
+}
+
+func (m Model) wideView() string {
+	leftWidth := (m.width - 1) / 2
+	rightWidth := m.width - leftWidth - 1
+	contentHeight := m.height - 1
+	projectHeight := contentHeight - 5
+	statsHeight, tmuxHeight := wideRightHeights(contentHeight)
+
+	left := lipgloss.JoinVertical(lipgloss.Left,
+		m.projectPanel(leftWidth, projectHeight),
+		m.statusPanel(leftWidth, 5),
+	)
+	right := lipgloss.JoinVertical(lipgloss.Left,
+		m.statsPanel(rightWidth, statsHeight),
+		m.tmuxPanel(rightWidth, tmuxHeight),
+	)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
+}
+
+// wideRightHeights splits the wide layout's right column evenly: both the
+// process tree and the tmux tree list every window and pane.
+func wideRightHeights(contentHeight int) (stats, tmux int) {
+	stats = max(8, contentHeight/2)
+	return stats, contentHeight - stats
+}
+
+func (m Model) stackedView() string {
+	projectHeight := max(7, m.height/2)
+	remaining := m.height - projectHeight - 5
+	tmuxHeight := max(6, (remaining*3)/5)
+	statsHeight := remaining - tmuxHeight
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.projectPanel(m.width, projectHeight),
+		m.statsPanel(m.width, statsHeight),
+		m.tmuxPanel(m.width, tmuxHeight),
+		m.statusPanel(m.width, 5),
+	)
+}
+
+func (m Model) tabHeader() string {
+	tabs := []string{"1 Projects", "2 System", "3 Tmux"}
+	for index := range tabs {
+		style := dimStyle.Padding(0, 1)
+		if section(index) == m.section {
+			style = titleStyle.Copy().Underline(true).Padding(0, 1)
+		}
+		tabs[index] = style.Render(tabs[index])
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+}
+
+func (m Model) tabbedView() string {
+	header := m.tabHeader()
+	contentHeight := m.height - 6
+	var content string
+	switch m.section {
+	case statsSection:
+		content = m.statsPanel(m.width, contentHeight)
+	case tmuxSection:
+		content = m.tmuxPanel(m.width, contentHeight)
+	default:
+		content = m.projectPanel(m.width, contentHeight)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, header, content, m.statusPanel(m.width, 5))
+}
+
+func (m Model) projectPanel(width, height int) string {
+	title := "Projects"
+	if m.projectsErr != nil {
+		title += "  stale"
+	}
+	return renderPanel(title, m.projects.View(), width, height, m.section == projectsSection, m.projectsErr)
+}
+
+func (m Model) statsPanel(width, height int) string {
+	title := "System + Processes"
+	if m.statsErr != nil {
+		title += "  stale"
+	}
+	body := "Statistics unavailable"
+	if m.haveStats {
+		body = m.renderStats(max(1, width-4), max(1, height-3))
+	}
+	return renderPanel(title, body, width, height, m.section == statsSection, m.statsErr)
+}
+
+func (m Model) tmuxPanel(width, height int) string {
+	title := "Tmux"
+	if waiting := m.agentsNeedingAttention(); waiting > 0 {
+		title += fmt.Sprintf("  %d agent%s waiting", waiting, plural(waiting))
+	}
+	if m.tmuxErr != nil {
+		title += "  stale"
+	}
+	body := "Tmux snapshot unavailable"
+	if m.haveTmux {
+		body = m.renderTmux(max(1, width-4), max(1, height-3))
+	}
+	return renderPanel(title, body, width, height, m.section == tmuxSection, m.tmuxErr)
+}
+
+func (m Model) statusPanel(width, height int) string {
+	status := m.status
+	if status == "" {
+		status = "Ready"
+	}
+	if m.operation != "" {
+		status = "[busy] " + status
+	}
+	if m.statusErr {
+		status = errorStyle.Render(status)
+	}
+	// Agent attention is surfaced here as well as in the tree because the tmux
+	// panel is hidden in the tabbed layout, and a blocked agent is exactly the
+	// thing the operator should not have to go looking for.
+	if waiting := m.waitingAgentSummary(); waiting != "" {
+		status += "   " + waitingStyle.Render(waiting)
+	}
+	help := dimStyle.Render("enter default   a open with   w worktree   / filter   n new   c clone   r refresh   q quit")
+	if m.section == tmuxSection {
+		help = dimStyle.Render("enter select pane   j/k move   click pane   tab sections   r refresh   q quit")
+	}
+	return renderPanel(m.statusPanelTitle(), status+"\n"+help, width, height, false, nil)
+}
+
+func (m Model) statusPanelTitle() string {
+	if m.parent.State == "" {
+		return "Actions / Status"
+	}
+	return "Actions / Status   " + m.parentIndicator()
+}
+
+func (m Model) parentIndicator() string {
+	label := "muxplane " + m.parent.State
+	style := dimStyle
+	switch m.parent.State {
+	case "connected":
+		style = projectCleanStyle
+		label = "● muxplane connected"
+	case "connecting", "reconnecting":
+		style = lipgloss.NewStyle().Foreground(warnColor)
+		label = "● muxplane " + m.parent.State
+	case "error":
+		style = errorStyle
+		label = "● muxplane error"
+	}
+	if m.parent.Detail != "" && m.parent.State != "connected" {
+		label += ": " + m.parent.Detail
+	}
+	return style.Render(label)
+}
+
+func (m Model) tmuxBodyOrigin() (x, y, width, height int, ok bool) {
+	if m.width < minimumWidth || m.height < minimumHeight {
+		return 0, 0, 0, 0, false
+	}
+	switch {
+	case m.height < 26 || m.width < narrowWidth:
+		if m.section != tmuxSection {
+			return 0, 0, 0, 0, false
+		}
+		return 2, lipgloss.Height(m.tabHeader()) + 2, max(1, m.width-4), max(1, m.height-9), true
+	case m.width >= columnsWidth:
+		layout := m.columnsLayout()
+		projects := lipgloss.JoinVertical(lipgloss.Left,
+			m.projectPanel(layout.widths[0], layout.projectHeight),
+			m.statusPanel(layout.widths[0], layout.statusHeight),
+		)
+		stats := m.statsPanel(layout.widths[1], layout.contentHeight)
+		return lipgloss.Width(projects) + lipgloss.Width(stats) + 4, 2, max(1, layout.widths[2]-4), max(1, layout.contentHeight-3), true
+	case m.width >= wideWidth:
+		leftWidth := (m.width - 1) / 2
+		rightWidth := m.width - leftWidth - 1
+		contentHeight := m.height - 1
+		projectHeight := contentHeight - 5
+		statsHeight, tmuxHeight := wideRightHeights(contentHeight)
+		left := lipgloss.JoinVertical(lipgloss.Left,
+			m.projectPanel(leftWidth, projectHeight),
+			m.statusPanel(leftWidth, 5),
+		)
+		stats := m.statsPanel(rightWidth, statsHeight)
+		return lipgloss.Width(left) + 3, lipgloss.Height(stats) + 2, max(1, rightWidth-4), max(1, tmuxHeight-3), true
+	default:
+		projectHeight := max(7, m.height/2)
+		remaining := m.height - projectHeight - 5
+		tmuxHeight := max(6, (remaining*3)/5)
+		statsHeight := remaining - tmuxHeight
+		projects := m.projectPanel(m.width, projectHeight)
+		stats := m.statsPanel(m.width, statsHeight)
+		return 2, lipgloss.Height(projects) + lipgloss.Height(stats) + 2, max(1, m.width-4), max(1, tmuxHeight-3), true
+	}
+}
+
+func (m Model) renderStats(width, height int) string {
+	host := m.stats.Host
+	lines := []string{
+		truncate(fmt.Sprintf("CPU %5.1f%%   Memory %s / %s", host.CPUPercent, formatBytes(host.MemoryUsed), formatBytes(host.MemoryTotal)), width),
+		truncate(fmt.Sprintf("Load %.2f %.2f %.2f   Uptime %s", host.LoadAverage[0], host.LoadAverage[1], host.LoadAverage[2], formatDuration(host.UptimeSeconds)), width),
+	}
+	if m.stats.WindowsHost != nil {
+		lines = hostComparisonLines(*m.stats.WindowsHost, host, width)
+	}
+	lines = append(lines, "")
+	lines = append(lines, m.processTreeLines(width, max(1, height-len(lines)))...)
+	return limitLines(lines, height)
+}
+
+// hostComparisonLines shows the Windows machine and the WSL virtual machine
+// running inside it with the same columns, so the two can be read side by side.
+func hostComparisonLines(windows domain.WindowsHostStats, wsl domain.HostStats, width int) []string {
+	const label = "%-8s"
+	type row struct{ first, second string }
+	makeRow := func(name, cpu string, used, total, uptime uint64, extra string) row {
+		return row{
+			first:  fmt.Sprintf(label+"CPU %6s  Mem %13s %4s", name, cpu, formatMemoryPair(used, total), formatPercent(used, total)),
+			second: fmt.Sprintf("up %-7s %s", formatDuration(uptime), extra),
+		}
+	}
+	joined := func(r row) string { return strings.TrimRight(r.first+"  "+r.second, " ") }
+
+	var windowsRow *row
+	var windowsStatus string
+	switch {
+	case windows.Error != "":
+		windowsStatus = errorStyle.Render(truncate(fmt.Sprintf(label+"%s", "Windows", windows.Error), width))
+	case !windows.Ready:
+		windowsStatus = dimStyle.Render(truncate(fmt.Sprintf(label+"starting Windows sampler…", "Windows"), width))
+	default:
+		cpu := "-"
+		if windows.CPUAvailable {
+			cpu = fmt.Sprintf("%.1f%%", windows.CPUPercent)
+		}
+		r := makeRow("Windows", cpu, windows.MemoryUsed, windows.MemoryTotal, windows.UptimeSeconds, fmt.Sprintf("%d CPUs", windows.LogicalCPUs))
+		windowsRow = &r
+	}
+	load := fmt.Sprintf("load %.2f %.2f %.2f", wsl.LoadAverage[0], wsl.LoadAverage[1], wsl.LoadAverage[2])
+	wslRow := makeRow("WSL", fmt.Sprintf("%.1f%%", wsl.CPUPercent), wsl.MemoryUsed, wsl.MemoryTotal, wsl.UptimeSeconds, load)
+
+	// Both machines use one line each, or both use two, so their columns line up.
+	rows := []row{wslRow}
+	if windowsRow != nil {
+		rows = append([]row{*windowsRow}, rows...)
+	}
+	oneLine := true
+	for _, r := range rows {
+		oneLine = oneLine && ansi.StringWidth(joined(r)) <= width
+	}
+	var lines []string
+	if windowsStatus != "" {
+		lines = append(lines, windowsStatus)
+	}
+	for _, r := range rows {
+		if oneLine {
+			lines = append(lines, joined(r))
+		} else {
+			lines = append(lines, truncate(r.first, width), truncate(strings.TrimRight(fmt.Sprintf(label, "")+r.second, " "), width))
+		}
+	}
+	return lines
+}
+
+// formatMemoryPair prints "30.9/31.7GiB", repeating the unit only when the
+// two values need different ones.
+func formatMemoryPair(used, total uint64) string {
+	usedText, totalText := formatBytes(used), formatBytes(total)
+	if unit := strings.TrimLeft(totalText, "0123456789."); unit != "" && strings.HasSuffix(usedText, unit) {
+		usedText = strings.TrimSuffix(usedText, unit)
+	}
+	return usedText + "/" + totalText
+}
+
+func formatPercent(used, total uint64) string {
+	if total == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.0f%%", float64(used)/float64(total)*100)
+}
+
+func (m Model) overlayView(_ string) string {
+	var title, body string
+	switch m.overlay {
+	case openersOverlay:
+		title = "Open Project With"
+		lines := make([]string, 0, len(m.openers)+1)
+		for index, opener := range m.openers {
+			marker := "  "
+			if index == m.openerIndex {
+				marker = "> "
+			}
+			lines = append(lines, marker+opener.Name+"  "+dimStyle.Render(string(opener.Mode)))
+		}
+		lines = append(lines, "", dimStyle.Render("enter run   esc cancel"))
+		body = strings.Join(lines, "\n")
+	case createOverlay:
+		title = "Create Project"
+		body = m.formView()
+	case cloneOverlay:
+		title = "Clone Repository"
+		body = m.formView()
+	case worktreeOverlay:
+		title = "Create Worktree"
+		body = m.formView()
+	}
+
+	overlayWidth := min(max(38, m.width/2), m.width-6)
+	box := renderPanel(title, body, overlayWidth, 0, true, nil)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box,
+		lipgloss.WithWhitespaceChars("·"),
+		lipgloss.WithWhitespaceForeground(lipgloss.AdaptiveColor{Light: "#D4E3D8", Dark: "#303E34"}),
+	)
+}
+
+func (m Model) formView() string {
+	lines := make([]string, len(m.inputs))
+	for index := range m.inputs {
+		lines[index] = m.inputs[index].View()
+	}
+	return strings.Join(append(lines, "", dimStyle.Render("enter submit   tab next field   esc cancel")), "\n")
+}
+
+func renderPanel(title, body string, width, height int, focused bool, stale error) string {
+	borderColor := dimColor
+	if focused {
+		borderColor = accentColor
+	}
+	header := titleStyle.Render(title)
+	if stale != nil {
+		header += "  " + errorStyle.Render(truncate(stale.Error(), max(10, width/2)))
+	}
+	content := header
+	if body != "" {
+		content += "\n" + body
+	}
+	// Width includes padding but not the border, so the panel is exactly width
+	// columns wide with width-4 columns of text, which is what callers size
+	// their content for. MaxHeight keeps an overflowing body from making the
+	// dashboard taller than the terminal, which would scroll its top rows away.
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Width(max(1, width-2))
+	if height > 0 {
+		style = style.Height(max(1, height-2)).MaxHeight(height)
+	}
+	return style.Render(content)
+}
+
+func formatBytes(bytes uint64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	divisor, exponent := uint64(unit), 0
+	for value := bytes / unit; value >= unit && exponent < 4; value /= unit {
+		divisor *= unit
+		exponent++
+	}
+	return fmt.Sprintf("%.1f%ciB", float64(bytes)/float64(divisor), "KMGTPE"[exponent])
+}
+
+func formatDuration(seconds uint64) string {
+	if seconds >= 86400 {
+		return fmt.Sprintf("%dd%dh", seconds/86400, (seconds%86400)/3600)
+	}
+	if seconds >= 3600 {
+		return fmt.Sprintf("%dh%dm", seconds/3600, (seconds%3600)/60)
+	}
+	if seconds >= 60 {
+		return fmt.Sprintf("%dm%ds", seconds/60, seconds%60)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
+func truncate(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= width {
+		return value
+	}
+	if width == 1 {
+		return "…"
+	}
+	return string(runes[:width-1]) + "…"
+}
+
+func limitLines(lines []string, height int) string {
+	if height > 0 && len(lines) > height {
+		if height == 1 {
+			lines = lines[:1]
+		} else {
+			lines = append(lines[:height-1], dimStyle.Render("…"))
+		}
+	}
+	return strings.Join(lines, "\n")
+}

@@ -1,2 +1,6 @@
 config.json
 .opencode
+/op
+/op.exe
+/dist/
+/.build_output/

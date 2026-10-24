@@ -1,0 +1,29 @@
+{
+  "name": "oc-notifier",
+  "displayName": "oc-notifier",
+  "version": "0.1.0",
+  "description": "Forward Claude Code idle, permission, and question events to op serve for Discord, Teams, and webhook notifications.",
+  "author": {
+    "name": "mSyke"
+  },
+  "homepage": "https://code.msyke.dev/mSyke/oc-notifier",
+  "repository": "https://code.msyke.dev/mSyke/oc-notifier",
+  "license": "MIT",
+  "keywords": ["notifications", "discord", "teams", "webhook", "idle", "hooks"],
+  "userConfig": {
+    "notifier_url": {
+      "type": "string",
+      "title": "op ingest URL",
+      "description": "Base URL of the op serve HTTP API (no trailing slash)",
+      "default": "http://127.0.0.1:8787",
+      "required": true
+    },
+    "token": {
+      "type": "string",
+      "title": "Auth token",
+      "description": "Bearer token matching the op serve API token",
+      "sensitive": true,
+      "required": false
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [{"type": "command", "bash": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh", "powershell": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh", "timeoutSec": 15}],
+    "SessionEnd": [{"type": "command", "bash": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh", "powershell": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh", "timeoutSec": 15}],
+    "UserPromptSubmit": [{"type": "command", "bash": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh", "powershell": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh", "timeoutSec": 15}],
+    "PreToolUse": [{"type": "command", "bash": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh", "powershell": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh", "timeoutSec": 15}],
+    "agentStop": [
+      {
+        "type": "command",
+        "bash": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh",
+        "powershell": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh",
+        "timeoutSec": 15
+      }
+    ],
+    "notification": [
+      {
+        "type": "command",
+        "matcher": "permission_prompt|elicitation_dialog",
+        "bash": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh",
+        "powershell": "bash /REPLACE/WITH/ABSOLUTE/PATH/to/scripts/forward.sh",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}
