@@ -33,21 +33,30 @@ type eventClient interface {
 	fetchSessionInfo(ctx context.Context, sessionID, directory string) (sessionInfo, bool)
 }
 
+// idleConfirmer reports whether a session is still running after debounce.
+// OpenCode 2 implements it against /api/session/active; v1 does not.
+type idleConfirmer interface {
+	confirmIdle(ctx context.Context, sessionID string) bool
+}
+
 type Monitor struct {
 	client     eventClient
 	notifier   Sender
 	desktopURL string
+	serverURL  string
 	debounce   time.Duration
 	source     Source
 	logger     *slog.Logger
 
-	mu          sync.Mutex
-	sessions    map[string]sessionState
-	pending     map[string]*time.Timer
-	subagents   map[string]struct{}
-	questions   map[string]time.Time
-	permissions map[string]time.Time
-	attention   map[attentionKey]Observation
+	mu                 sync.Mutex
+	sessions           map[string]sessionState
+	pending            map[string]*time.Timer
+	subagents          map[string]struct{}
+	questions          *eventDeduper
+	permissions        *eventDeduper
+	attention          map[attentionKey]Observation
+	sawQuestionAsked   bool
+	sawPermissionAsked bool
 }
 
 func newMonitor(client eventClient, notifier Sender, desktopURL string, debounce time.Duration, source Source, logger *slog.Logger) *Monitor {
@@ -67,8 +76,8 @@ func newMonitor(client eventClient, notifier Sender, desktopURL string, debounce
 		sessions:    map[string]sessionState{},
 		pending:     map[string]*time.Timer{},
 		subagents:   map[string]struct{}{},
-		questions:   map[string]time.Time{},
-		permissions: map[string]time.Time{},
+		questions:   newEventDeduper(questionTTL),
+		permissions: newEventDeduper(questionTTL),
 		attention:   map[attentionKey]Observation{},
 	}
 }
@@ -92,9 +101,22 @@ func (m *Monitor) handlePayload(ctx context.Context, directory string, payload j
 	case "question.asked":
 		event, ok := parseQuestionAsked(payload)
 		if ok {
+			m.mu.Lock()
+			m.sawQuestionAsked = true
+			m.mu.Unlock()
 			m.handleQuestion(ctx, directory, event)
 		}
 	case "message.part.updated":
+		// The tool part usually arrives before question.asked, so the latch
+		// rarely suppresses that twin — call-id correlation does. It does drop
+		// a later part with no ask behind it, which is what a denied question
+		// permission looks like.
+		m.mu.Lock()
+		seen := m.sawQuestionAsked
+		m.mu.Unlock()
+		if seen {
+			return
+		}
 		event, ok := parseLegacyQuestion(payload)
 		if ok {
 			m.handleQuestion(ctx, directory, event)
@@ -102,9 +124,18 @@ func (m *Monitor) handlePayload(ctx context.Context, directory string, payload j
 	case "permission.asked":
 		event, ok := parsePermissionAsked(payload)
 		if ok {
+			m.mu.Lock()
+			m.sawPermissionAsked = true
+			m.mu.Unlock()
 			m.handlePermission(ctx, directory, event)
 		}
 	case "permission.updated":
+		m.mu.Lock()
+		seen := m.sawPermissionAsked
+		m.mu.Unlock()
+		if seen {
+			return
+		}
 		event, ok := parseLegacyPermission(payload)
 		if ok {
 			m.handlePermission(ctx, directory, event)
@@ -168,6 +199,15 @@ func (m *Monitor) flushIdle(ctx context.Context, directory, sessionID string) {
 		m.mu.Unlock()
 		return
 	}
+	if confirmer, ok := m.client.(idleConfirmer); ok {
+		if !confirmer.confirmIdle(ctx, sessionID) {
+			m.mu.Lock()
+			m.sessions[sessionID] = sessionState{status: "busy", lastSeen: time.Now()}
+			m.mu.Unlock()
+			m.logger.Info("session still active on server, skipping idle notification", "session", sessionID)
+			return
+		}
+	}
 	title := info.Title
 	if title == "" {
 		title = sessionID
@@ -180,7 +220,7 @@ func (m *Monitor) flushIdle(ctx context.Context, directory, sessionID string) {
 		SessionTitle:     title,
 		ProjectID:        info.ProjectID,
 		ProjectDirectory: directory,
-		DesktopURL:       DesktopURL(m.desktopURL, directory, sessionID),
+		DesktopURL:       m.desktopLink(directory, sessionID),
 		Timestamp:        time.Now(),
 	})
 }
@@ -191,18 +231,17 @@ func (m *Monitor) handleQuestion(ctx context.Context, directory string, event qu
 		m.mu.Unlock()
 		return
 	}
-	if _, seen := m.questions[event.ID]; seen {
-		m.mu.Unlock()
+	m.mu.Unlock()
+	// Claim the request id and tool call before the session-info await so a
+	// twin event that overlaps in flight cannot also notify.
+	if !m.questions.reserve(questionKeys(event)) {
 		return
 	}
-	m.questions[event.ID] = time.Now()
-	m.mu.Unlock()
 
 	info, _ := m.client.fetchSessionInfo(ctx, event.SessionID, directory)
 	if info.ParentSessionID != "" {
 		m.mu.Lock()
 		m.subagents[event.SessionID] = struct{}{}
-		delete(m.questions, event.ID)
 		m.mu.Unlock()
 		return
 	}
@@ -218,7 +257,7 @@ func (m *Monitor) handleQuestion(ctx context.Context, directory string, event qu
 		SessionTitle:     title,
 		ProjectID:        info.ProjectID,
 		ProjectDirectory: directory,
-		DesktopURL:       DesktopURL(m.desktopURL, directory, event.SessionID),
+		DesktopURL:       m.desktopLink(directory, event.SessionID),
 		Timestamp:        time.Now(),
 		Question:         formatQuestionText(event),
 		Choices:          buildQuestionChoices(event),
@@ -231,18 +270,15 @@ func (m *Monitor) handlePermission(ctx context.Context, directory string, event 
 		m.mu.Unlock()
 		return
 	}
-	if _, seen := m.permissions[event.ID]; seen {
-		m.mu.Unlock()
+	m.mu.Unlock()
+	if !m.permissions.reserve(permissionKeys(event)) {
 		return
 	}
-	m.permissions[event.ID] = time.Now()
-	m.mu.Unlock()
 
 	info, _ := m.client.fetchSessionInfo(ctx, event.SessionID, directory)
 	if info.ParentSessionID != "" {
 		m.mu.Lock()
 		m.subagents[event.SessionID] = struct{}{}
-		delete(m.permissions, event.ID)
 		m.mu.Unlock()
 		return
 	}
@@ -258,7 +294,7 @@ func (m *Monitor) handlePermission(ctx context.Context, directory string, event 
 		SessionTitle:     title,
 		ProjectID:        info.ProjectID,
 		ProjectDirectory: directory,
-		DesktopURL:       DesktopURL(m.desktopURL, directory, event.SessionID),
+		DesktopURL:       m.desktopLink(directory, event.SessionID),
 		Timestamp:        time.Now(),
 		PermissionTitle:  event.Title,
 		PermissionType:   event.PermissionType,
@@ -356,20 +392,16 @@ func (m *Monitor) cleanupLoop(ctx context.Context) {
 func (m *Monitor) cleanup(now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.questions.mu.Lock()
+	m.questions.forgetLocked(now)
+	m.questions.mu.Unlock()
+	m.permissions.mu.Lock()
+	m.permissions.forgetLocked(now)
+	m.permissions.mu.Unlock()
 	for id, state := range m.sessions {
 		if now.Sub(state.lastSeen) > sessionTTL {
 			delete(m.sessions, id)
 			delete(m.subagents, id)
-		}
-	}
-	for id, seen := range m.questions {
-		if now.Sub(seen) > questionTTL {
-			delete(m.questions, id)
-		}
-	}
-	for id, seen := range m.permissions {
-		if now.Sub(seen) > questionTTL {
-			delete(m.permissions, id)
 		}
 	}
 	for key, observation := range m.attention {
@@ -405,6 +437,13 @@ func (m *Monitor) sendAttention(ctx context.Context, requestID string, notificat
 	observe(m.notifier, observation)
 	m.mu.Unlock()
 	return m.notifier.Send(alreadyObserved(ctx), notification)
+}
+
+func (m *Monitor) desktopLink(directory, sessionID string) string {
+	if m.source == SourceOpenCode2 {
+		return DesktopURLForServer(m.desktopURL, m.serverURL, sessionID)
+	}
+	return DesktopURL(m.desktopURL, directory, sessionID)
 }
 
 func formatQuestionText(event questionEvent) string {

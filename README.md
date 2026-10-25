@@ -256,6 +256,7 @@ The canonical file is JSON:
       "enabled": false,
       "baseUrl": "",
       "desktopBaseUrl": "",
+      "serverUrl": "",
       "password": ""
     },
     "ingest": {
@@ -436,6 +437,19 @@ OpenCode 1 and OpenCode 2 can be watched together. `notifications.opencode` is t
 service; leave `baseUrl` and `password` empty to discover them from
 `~/.local/state/opencode/service.json` (or `$XDG_STATE_HOME/opencode/service.json`). Set them
 explicitly to pin a specific v2 server. v2 auth is HTTP Basic with username `opencode`.
+
+v1 desktop links are `{desktopBaseUrl}/{base64url(directory)}/session/{id}`. v2 links are
+`{desktopBaseUrl}/server/{base64url(serverUrl)}/session/{id}` because the shared web UI can talk to
+more than one server. `notifications.opencode2.serverUrl` is that public URL as the frontend knows
+it; when it is empty, the resolved `baseUrl` is used. After the idle debounce, v2 also checks
+`/api/session/active` and skips the notification if the session is still running.
+
+One OpenCode prompt is described twice (the asked event and the underlying tool part). `op`
+correlates both by tool call id and sends one card. Identical notifications for the same session
+inside 15 seconds are dropped as well. Grok session titles are read from
+`$GROK_HOME/sessions/<cwd>/<sessionId>/summary.json` (`generated_title`, then `session_summary`)
+when a hook is forwarded. Discord cards title the embed `{project} · {session}` and put the harness
+and machine in the webhook username.
 
 Ingest routes share the `op serve` listener and the same bearer token. Plugin forwarders default to
 `http://127.0.0.1:8787`; set `OC_NOTIFIER_URL` / `OC_NOTIFIER_TOKEN` (or the Claude plugin user

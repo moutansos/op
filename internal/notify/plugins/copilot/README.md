@@ -45,7 +45,7 @@ Subagent-scoped payloads (`agentId` present) are ignored server-side.
 
 ## Prerequisites
 
-1. op running with `ingest.enabled: true` (default port **4100**)
+1. `op serve` running with `notifications.ingest.enabled: true` (default `127.0.0.1:8787`)
 2. **`bash` and `curl` on `PATH`** (Windows: Git Bash or equivalent — both the
    `bash` and `powershell` hook entries invoke the bash forwarder)
 3. [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli/overview) with hooks support
@@ -53,9 +53,9 @@ Subagent-scoped payloads (`agentId` present) are ignored server-side.
 ## Install
 
 ```bash
-bun run install-copilot-plugin
-# → installs scripts under ~/.copilot/hooks/op
-# → writes ~/.copilot/hooks/op.json
+op notify install-copilot
+# → installs scripts under ~/.copilot/hooks/oc-notifier
+# → writes ~/.copilot/hooks/oc-notifier.json
 ```
 
 If `COPILOT_HOME` is set, hooks are installed under `$COPILOT_HOME/hooks/`

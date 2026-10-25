@@ -215,6 +215,11 @@ func validateNotifications(config NotificationsConfig) error {
 			return err
 		}
 	}
+	if strings.TrimSpace(config.OpenCode2.ServerURL) != "" {
+		if err := requireHTTPURL("notifications.opencode2.serverUrl", config.OpenCode2.ServerURL); err != nil {
+			return err
+		}
+	}
 	for i, provider := range config.Providers {
 		if err := validateNotificationProvider(fmt.Sprintf("notifications.providers[%d]", i), provider); err != nil {
 			return err

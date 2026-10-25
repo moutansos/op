@@ -21,6 +21,7 @@ type OpenCode2Config struct {
 	Enabled        bool
 	BaseURL        string
 	DesktopBaseURL string
+	ServerURL      string
 	Password       string
 	ServiceFile    string
 }
@@ -32,6 +33,7 @@ type openCode2ServiceFile struct {
 
 type openCode2Client struct {
 	baseURL     string
+	serverURL   string
 	password    string
 	serviceFile string
 	client      *http.Client
@@ -58,6 +60,7 @@ func newOpenCode2Client(config OpenCode2Config, logger *slog.Logger) *openCode2C
 	}
 	return &openCode2Client{
 		baseURL:     strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"),
+		serverURL:   strings.TrimSpace(config.ServerURL),
 		password:    config.Password,
 		serviceFile: serviceFile,
 		client:      &http.Client{},
@@ -81,6 +84,19 @@ func (c *openCode2Client) log() *slog.Logger {
 		return slog.Default()
 	}
 	return c.logger
+}
+
+// publicServerURL is the address the OpenCode 2 web UI uses to identify this
+// server. It defaults to the resolved connect URL when serverUrl is unset.
+func (c *openCode2Client) publicServerURL() string {
+	if c != nil && strings.TrimSpace(c.serverURL) != "" {
+		return normalizeServerURL(c.serverURL)
+	}
+	baseURL, _, err := c.resolve()
+	if err != nil {
+		return ""
+	}
+	return normalizeServerURL(baseURL)
 }
 
 func (c *openCode2Client) resolve() (string, string, error) {
@@ -205,6 +221,45 @@ func (c *openCode2Client) fetchSessionInfo(ctx context.Context, sessionID, direc
 	}, true
 }
 
+// confirmIdle reports whether the session is absent from /api/session/active.
+// A failed lookup fails open so a transient API error still notifies.
+func (c *openCode2Client) confirmIdle(ctx context.Context, sessionID string) bool {
+	baseURL, password, err := c.resolve()
+	if err != nil {
+		c.log().Error("opencode2 endpoint", "err", err)
+		return true
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/session/active", nil)
+	if err != nil {
+		c.log().Error("opencode2 active sessions request", "err", err)
+		return true
+	}
+	c.authorize(request, password)
+	response, err := c.client.Do(request)
+	if err != nil {
+		c.log().Error("opencode2 active sessions fetch", "err", err)
+		return true
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+		c.log().Error("opencode2 active sessions rejected", "status", response.Status, "body", strings.TrimSpace(string(body)))
+		return true
+	}
+	var payload struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		c.log().Error("opencode2 active sessions decode", "err", err)
+		return true
+	}
+	if payload.Data == nil {
+		return true
+	}
+	_, active := payload.Data[sessionID]
+	return !active
+}
+
 func (c *openCode2Client) watch(ctx context.Context, handle func(string, json.RawMessage)) error {
 	delay := time.Second
 	const maxDelay = 30 * time.Second
@@ -264,8 +319,9 @@ func (c *openCode2Client) connect(ctx context.Context, handle func(string, json.
 }
 
 func translateV2Event(data []byte) (string, json.RawMessage, bool) {
+	decoded := unwrapJSONString(data)
 	var event v2WireEvent
-	if json.Unmarshal(data, &event) != nil || event.Type == "" {
+	if json.Unmarshal(decoded, &event) != nil || event.Type == "" {
 		return "", nil, false
 	}
 	directory := ""
@@ -283,7 +339,7 @@ func translateV2Event(data []byte) (string, json.RawMessage, bool) {
 	case "permission.replied", "permission.rejected", "session.deleted":
 		payload, err := json.Marshal(map[string]any{"type": event.Type, "properties": event.Data})
 		return directory, payload, err == nil
-	case "session.execution.started", "session.step.started":
+	case "session.execution.started", "session.step.started", "session.compaction.started", "session.retry.scheduled":
 		sessionID := v2SessionID(event.Data)
 		if sessionID == "" {
 			return "", nil, false
@@ -312,6 +368,16 @@ func translateV2Event(data []byte) (string, json.RawMessage, bool) {
 	}
 }
 
+// unwrapJSONString parses a second time when the SSE data payload is itself a
+// JSON string. A non-string payload is returned unchanged.
+func unwrapJSONString(data []byte) []byte {
+	var encoded string
+	if json.Unmarshal(data, &encoded) != nil || encoded == "" {
+		return data
+	}
+	return []byte(encoded)
+}
+
 func v2SessionID(data json.RawMessage) string {
 	var payload struct {
 		SessionID string `json:"sessionID"`
@@ -336,9 +402,10 @@ func v2StatusPayload(sessionID, status string) json.RawMessage {
 func v2QuestionPayload(data json.RawMessage) (json.RawMessage, bool) {
 	var event struct {
 		Form struct {
-			ID        string `json:"id"`
-			SessionID string `json:"sessionID"`
-			Title     string `json:"title"`
+			ID        string          `json:"id"`
+			SessionID string          `json:"sessionID"`
+			Title     string          `json:"title"`
+			Metadata  json.RawMessage `json:"metadata"`
 			Fields    []struct {
 				Key         string `json:"key"`
 				Title       string `json:"title"`
@@ -347,6 +414,7 @@ func v2QuestionPayload(data json.RawMessage) (json.RawMessage, bool) {
 				Custom      *bool  `json:"custom"`
 				Options     []struct {
 					Label       string `json:"label"`
+					Value       string `json:"value"`
 					Description string `json:"description"`
 				} `json:"options"`
 			} `json:"fields"`
@@ -355,32 +423,36 @@ func v2QuestionPayload(data json.RawMessage) (json.RawMessage, bool) {
 	if json.Unmarshal(data, &event) != nil || event.Form.ID == "" || event.Form.SessionID == "" {
 		return nil, false
 	}
-	questions := make([]map[string]any, 0, len(event.Form.Fields)+1)
-	if event.Form.Title != "" && len(event.Form.Fields) == 0 {
-		questions = append(questions, map[string]any{"question": event.Form.Title})
+	// Forms are a general prompt. Only the question kind becomes a notification.
+	if v2MetadataKind(event.Form.Metadata) != "question" {
+		return nil, false
 	}
+	questions := make([]map[string]any, 0, len(event.Form.Fields)+1)
 	for _, field := range event.Form.Fields {
-		question := strings.TrimSpace(field.Title)
+		question := strings.TrimSpace(field.Description)
 		if question == "" {
-			question = strings.TrimSpace(field.Description)
+			question = strings.TrimSpace(field.Title)
 		}
 		if question == "" {
-			question = event.Form.Title
+			question = strings.TrimSpace(event.Form.Title)
 		}
 		if question == "" {
 			question = "OpenCode is waiting for your input"
 		}
 		options := make([]map[string]any, 0, len(field.Options))
 		for _, option := range field.Options {
-			label := option.Label
+			label := strings.TrimSpace(option.Label)
+			if label == "" {
+				label = strings.TrimSpace(option.Value)
+			}
 			if label == "" {
 				label = "Option"
 			}
 			options = append(options, map[string]any{"label": label, "description": option.Description})
 		}
 		item := map[string]any{"question": question, "options": options}
-		if event.Form.Title != "" && event.Form.Title != question {
-			item["header"] = event.Form.Title
+		if header := strings.TrimSpace(field.Title); header != "" {
+			item["header"] = header
 		}
 		if field.Custom != nil {
 			item["custom"] = *field.Custom
@@ -388,15 +460,19 @@ func v2QuestionPayload(data json.RawMessage) (json.RawMessage, bool) {
 		questions = append(questions, item)
 	}
 	if len(questions) == 0 {
-		questions = []map[string]any{{"question": firstNonEmpty(event.Form.Title, "OpenCode is waiting for your input")}}
+		questions = []map[string]any{{"question": firstNonEmpty(strings.TrimSpace(event.Form.Title), "OpenCode is waiting for your input")}}
+	}
+	properties := map[string]any{
+		"id":        event.Form.ID,
+		"sessionID": event.Form.SessionID,
+		"questions": questions,
+	}
+	if callID := v2ToolCallID(event.Form.Metadata, "tool"); callID != "" {
+		properties["tool"] = map[string]any{"callID": callID}
 	}
 	payload, err := json.Marshal(map[string]any{
-		"type": "question.asked",
-		"properties": map[string]any{
-			"id":        event.Form.ID,
-			"sessionID": event.Form.SessionID,
-			"questions": questions,
-		},
+		"type":       "question.asked",
+		"properties": properties,
 	})
 	if err != nil {
 		return nil, false
@@ -406,38 +482,71 @@ func v2QuestionPayload(data json.RawMessage) (json.RawMessage, bool) {
 
 func v2PermissionPayload(data json.RawMessage) (json.RawMessage, bool) {
 	var event struct {
-		ID        string   `json:"id"`
-		SessionID string   `json:"sessionID"`
-		Action    string   `json:"action"`
-		Resources []string `json:"resources"`
-		Save      []string `json:"save"`
-		Message   string   `json:"message"`
+		ID        string          `json:"id"`
+		SessionID string          `json:"sessionID"`
+		Action    string          `json:"action"`
+		Resources []string        `json:"resources"`
+		Save      []string        `json:"save"`
+		Source    json.RawMessage `json:"source"`
 	}
 	if json.Unmarshal(data, &event) != nil || event.ID == "" || event.SessionID == "" {
 		return nil, false
 	}
-	permission := event.Action
-	if event.Message != "" {
-		permission = event.Action
-		if permission == "" {
-			permission = event.Message
-		}
-	}
+	permission := strings.TrimSpace(event.Action)
 	if permission == "" {
 		permission = "permission"
 	}
+	always := event.Save
+	if len(always) == 0 {
+		always = event.Resources
+	}
+	properties := map[string]any{
+		"id":         event.ID,
+		"sessionID":  event.SessionID,
+		"permission": permission,
+		"patterns":   event.Resources,
+		"always":     always,
+	}
+	if callID := v2SourceID(event.Source); callID != "" {
+		properties["tool"] = map[string]any{"callID": callID}
+	}
 	payload, err := json.Marshal(map[string]any{
-		"type": "permission.asked",
-		"properties": map[string]any{
-			"id":         event.ID,
-			"sessionID":  event.SessionID,
-			"permission": permission,
-			"patterns":   event.Resources,
-			"always":     event.Save,
-		},
+		"type":       "permission.asked",
+		"properties": properties,
 	})
 	if err != nil {
 		return nil, false
 	}
 	return payload, true
+}
+
+func v2MetadataKind(metadata json.RawMessage) string {
+	var payload struct {
+		Kind string `json:"kind"`
+	}
+	if len(metadata) == 0 || json.Unmarshal(metadata, &payload) != nil {
+		return ""
+	}
+	return payload.Kind
+}
+
+func v2ToolCallID(metadata json.RawMessage, field string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(metadata, &payload) != nil {
+		return ""
+	}
+	return v2SourceID(payload[field])
+}
+
+func v2SourceID(source json.RawMessage) string {
+	var payload struct {
+		ID string `json:"id"`
+	}
+	if len(source) == 0 || json.Unmarshal(source, &payload) != nil {
+		return ""
+	}
+	return payload.ID
 }

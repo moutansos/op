@@ -101,6 +101,31 @@ func DesktopURL(baseURL, directory, sessionID string) string {
 	return baseURL + "/" + encoded + "/session/" + sessionID
 }
 
+// DesktopURLForServer builds an OpenCode 2 web-UI link. The UI keys sessions by
+// the public server URL, not the project directory:
+// {desktopBaseUrl}/server/{base64url(serverUrl)}/session/{sessionID}.
+func DesktopURLForServer(desktopBaseURL, serverURL, sessionID string) string {
+	desktopBaseURL = strings.TrimRight(strings.TrimSpace(desktopBaseURL), "/")
+	if desktopBaseURL == "" || sessionID == "" {
+		return ""
+	}
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(normalizeServerURL(serverURL)))
+	return desktopBaseURL + "/server/" + encoded + "/session/" + sessionID
+}
+
+// normalizeServerURL matches OpenCode's server-route helper: add http:// when
+// the scheme is missing and strip trailing slashes.
+func normalizeServerURL(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+		trimmed = "http://" + trimmed
+	}
+	return strings.TrimRight(trimmed, "/")
+}
+
 func normalizeDirectory(path string) string {
 	return strings.TrimRight(path, "/")
 }

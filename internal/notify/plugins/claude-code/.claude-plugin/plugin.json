@@ -14,7 +14,7 @@
     "notifier_url": {
       "type": "string",
       "title": "op ingest URL",
-      "description": "Base URL of the op serve HTTP API (no trailing slash)",
+      "description": "Base URL of the op serve HTTP API (no trailing slash). Hooks POST to /v1/claude-code/hook.",
       "default": "http://127.0.0.1:8787",
       "required": true
     },

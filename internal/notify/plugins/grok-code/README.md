@@ -45,17 +45,19 @@ approval UI rarely appears, so permission Discord cards may be uncommon.
 
 ## Prerequisites
 
-1. op running with `ingest.enabled: true` (default port **4100**)
+1. `op serve` running with `notifications.ingest.enabled: true` (default `127.0.0.1:8787`)
 2. `curl` on `PATH`
 
 ## Install
 
 ```bash
-bun run install-grok-plugin
-# → ~/.grok/plugins/op (auto-trusted)
+op notify install-grok
+# → ~/.grok/plugins/oc-notifier (auto-trusted)
 ```
 
-Optional env: `OC_NOTIFIER_URL` (default `http://127.0.0.1:8787`), `OC_NOTIFIER_TOKEN`.
+Optional env: `OC_NOTIFIER_URL` (default `http://127.0.0.1:8787`), `OC_NOTIFIER_TOKEN`
+(the op serve API token). Session titles are read from
+`$GROK_HOME/sessions/.../summary.json` on the machine running `op serve`.
 
 Restart Grok or `/plugins reload` after install.
 

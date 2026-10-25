@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Sender interface {
@@ -16,6 +17,10 @@ type Notifier struct {
 	ignoreDirectories []string
 	hostname          string
 	logger            *slog.Logger
+	dedupeWindow      time.Duration
+	now               func() time.Time
+	recentMu          sync.Mutex
+	recentSends       map[string]time.Time
 	observerMu        sync.Mutex
 	observer          func(Observation)
 	observations      []observationDelivery
@@ -38,7 +43,15 @@ func NewNotifier(providers []Provider, ignoreDirectories []string, logger *slog.
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Notifier{providers: enabled, ignoreDirectories: ignored, hostname: localHostname(), logger: logger}
+	return &Notifier{
+		providers:         enabled,
+		ignoreDirectories: ignored,
+		hostname:          localHostname(),
+		logger:            logger,
+		dedupeWindow:      defaultDedupeWindow,
+		now:               time.Now,
+		recentSends:       map[string]time.Time{},
+	}
 }
 
 func (n *Notifier) Send(ctx context.Context, notification Notification) error {
@@ -50,6 +63,10 @@ func (n *Notifier) Send(ctx context.Context, notification Notification) error {
 	}
 	if ignored := n.matchIgnoredDirectory(notification.ProjectDirectory); ignored != "" {
 		n.logger.Info("notification suppressed", "session", notification.SessionID, "directory", ignored)
+		return nil
+	}
+	if n.isDuplicate(notification) {
+		n.logger.Info("notification suppressed", "reason", "dedupe", "type", notification.Type, "session", notification.SessionID, "host", notification.Hostname)
 		return nil
 	}
 	if len(n.providers) == 0 {
@@ -68,6 +85,32 @@ func (n *Notifier) Send(ctx context.Context, notification Notification) error {
 	}
 	wait.Wait()
 	return nil
+}
+
+func (n *Notifier) isDuplicate(notification Notification) bool {
+	if n == nil || n.dedupeWindow <= 0 {
+		return false
+	}
+	now := time.Now()
+	if n.now != nil {
+		now = n.now()
+	}
+	key := dedupeKey(notification)
+	n.recentMu.Lock()
+	defer n.recentMu.Unlock()
+	if n.recentSends == nil {
+		n.recentSends = map[string]time.Time{}
+	}
+	for existing, seen := range n.recentSends {
+		if now.Sub(seen) >= n.dedupeWindow {
+			delete(n.recentSends, existing)
+		}
+	}
+	if last, ok := n.recentSends[key]; ok && now.Sub(last) < n.dedupeWindow {
+		return true
+	}
+	n.recentSends[key] = now
+	return false
 }
 
 func (n *Notifier) matchIgnoredDirectory(projectDirectory string) string {

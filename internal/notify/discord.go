@@ -33,11 +33,9 @@ func (p *discordProvider) Send(ctx context.Context, notification Notification) e
 		name = "project"
 	}
 	identity := source.Label() + " · " + displayHostname(notification.Hostname)
-	eventLabel, status, color := discordEvent(notification.Type)
+	_, status, color := discordEvent(notification.Type)
+	sessionName := firstNonEmpty(notification.SessionTitle, notification.SessionID)
 	fields := []map[string]any{
-		{"name": "Event", "value": eventLabel, "inline": true},
-		{"name": "Project", "value": name, "inline": true},
-		{"name": "Session", "value": firstNonEmpty(notification.SessionTitle, notification.SessionID), "inline": true},
 		{"name": "Status", "value": status, "inline": true},
 	}
 	if notification.Question != "" {
@@ -58,7 +56,7 @@ func (p *discordProvider) Send(ctx context.Context, notification Notification) e
 		footer = identity
 	}
 	embed := map[string]any{
-		"title":     identity,
+		"title":     truncate(name+" · "+sessionName, 256),
 		"color":     color,
 		"fields":    fields,
 		"timestamp": notification.Timestamp.UTC().Format("2006-01-02T15:04:05.000Z07:00"),

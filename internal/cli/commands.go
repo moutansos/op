@@ -431,6 +431,7 @@ func notifyOptions(config config.NotificationsConfig, logger *slog.Logger) notif
 			Enabled:        config.OpenCode2.Enabled,
 			BaseURL:        config.OpenCode2.BaseURL,
 			DesktopBaseURL: config.OpenCode2.DesktopBaseURL,
+			ServerURL:      config.OpenCode2.ServerURL,
 			Password:       config.OpenCode2.Password,
 		},
 		Providers: providers,
