@@ -429,6 +429,7 @@ func TestMonitorDropsLegacyTwinAfterQuestionAsked(t *testing.T) {
 }
 
 type scriptedIdleClient struct {
+	mu     sync.Mutex
 	active bool
 	info   sessionInfo
 }
@@ -442,31 +443,52 @@ func (c *scriptedIdleClient) fetchSessionInfo(context.Context, string, string) (
 }
 
 func (c *scriptedIdleClient) confirmIdle(context.Context, string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return !c.active
 }
 
+func (c *scriptedIdleClient) setActive(active bool) {
+	c.mu.Lock()
+	c.active = active
+	c.mu.Unlock()
+}
+
 func TestMonitorSkipsIdleWhileSessionStillActive(t *testing.T) {
+	var mu sync.Mutex
 	var sent []Notification
 	client := &scriptedIdleClient{active: true, info: sessionInfo{Title: "title"}}
 	monitor := newMonitor(client, recordingSender{send: func(n Notification) {
+		mu.Lock()
 		sent = append(sent, n)
+		mu.Unlock()
 	}}, "https://beta.example", 0, SourceOpenCode2, nil)
 	monitor.serverURL = "https://oc2.example.com"
 	monitor.handleStatus(context.Background(), "/repos/op", sessionStatusEvent{SessionID: "s1", Status: "busy"})
 	monitor.handleStatus(context.Background(), "/repos/op", sessionStatusEvent{SessionID: "s1", Status: "idle"})
 	time.Sleep(40 * time.Millisecond)
-	if len(sent) != 0 {
-		t.Fatalf("active session notified: %+v", sent)
+	mu.Lock()
+	count := len(sent)
+	mu.Unlock()
+	if count != 0 {
+		t.Fatalf("active session notified: %d", count)
 	}
-	client.active = false
+	client.setActive(false)
 	monitor.handleStatus(context.Background(), "/repos/op", sessionStatusEvent{SessionID: "s1", Status: "busy"})
 	monitor.handleStatus(context.Background(), "/repos/op", sessionStatusEvent{SessionID: "s1", Status: "idle"})
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && len(sent) == 0 {
+	var got []Notification
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got = append([]Notification(nil), sent...)
+		mu.Unlock()
+		if len(got) > 0 {
+			break
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(sent) != 1 || !strings.Contains(sent[0].DesktopURL, "/server/") {
-		t.Fatalf("sent = %+v", sent)
+	if len(got) != 1 || !strings.Contains(got[0].DesktopURL, "/server/") {
+		t.Fatalf("sent = %+v", got)
 	}
 }
 
