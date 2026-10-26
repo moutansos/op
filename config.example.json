@@ -51,6 +51,7 @@
       "enabled": false,
       "baseUrl": "",
       "desktopBaseUrl": "",
+      "serverUrl": "",
       "password": ""
     },
     "ingest": {

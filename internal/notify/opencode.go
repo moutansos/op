@@ -30,6 +30,7 @@ type questionEvent struct {
 	ID        string
 	SessionID string
 	Questions []questionInfo
+	CallID    string
 }
 
 type questionInfo struct {
@@ -46,6 +47,7 @@ type permissionEvent struct {
 	PermissionType string
 	Patterns       []string
 	AlwaysPatterns []string
+	CallID         string
 }
 
 type sessionInfo struct {
@@ -253,6 +255,9 @@ func parseQuestionAsked(payload json.RawMessage) (questionEvent, bool) {
 		Properties struct {
 			ID        string `json:"id"`
 			SessionID string `json:"sessionID"`
+			Tool      struct {
+				CallID string `json:"callID"`
+			} `json:"tool"`
 			Questions []struct {
 				Question string `json:"question"`
 				Header   string `json:"header"`
@@ -275,7 +280,12 @@ func parseQuestionAsked(payload json.RawMessage) (questionEvent, bool) {
 		}
 		questions = append(questions, questionInfo{Question: item.Question, Header: item.Header, Options: options, Custom: item.Custom})
 	}
-	return questionEvent{ID: event.Properties.ID, SessionID: event.Properties.SessionID, Questions: questions}, true
+	return questionEvent{
+		ID:        event.Properties.ID,
+		SessionID: event.Properties.SessionID,
+		Questions: questions,
+		CallID:    event.Properties.Tool.CallID,
+	}, true
 }
 
 func parseLegacyQuestion(payload json.RawMessage) (questionEvent, bool) {
@@ -285,6 +295,7 @@ func parseLegacyQuestion(payload json.RawMessage) (questionEvent, bool) {
 				Type      string `json:"type"`
 				Tool      string `json:"tool"`
 				SessionID string `json:"sessionID"`
+				CallID    string `json:"callID"`
 				State     struct {
 					Status string `json:"status"`
 					Input  struct {
@@ -328,7 +339,11 @@ func parseLegacyQuestion(payload json.RawMessage) (questionEvent, bool) {
 	if len(questions) == 0 {
 		questions = []questionInfo{{Question: "OpenCode is waiting for your input"}}
 	}
-	return questionEvent{ID: part.SessionID + ":" + truncate(questions[0].Question, 100), SessionID: part.SessionID, Questions: questions}, true
+	id := part.SessionID + ":" + truncate(questions[0].Question, 100)
+	if part.CallID != "" {
+		id = part.SessionID + ":" + part.CallID
+	}
+	return questionEvent{ID: id, SessionID: part.SessionID, Questions: questions, CallID: part.CallID}, true
 }
 
 func parsePermissionAsked(payload json.RawMessage) (permissionEvent, bool) {
@@ -339,6 +354,9 @@ func parsePermissionAsked(payload json.RawMessage) (permissionEvent, bool) {
 			Permission string   `json:"permission"`
 			Patterns   []string `json:"patterns"`
 			Always     []string `json:"always"`
+			Tool       struct {
+				CallID string `json:"callID"`
+			} `json:"tool"`
 		} `json:"properties"`
 	}
 	if json.Unmarshal(payload, &event) != nil || event.Properties.ID == "" || event.Properties.SessionID == "" {
@@ -355,6 +373,7 @@ func parsePermissionAsked(payload json.RawMessage) (permissionEvent, bool) {
 		PermissionType: event.Properties.Permission,
 		Patterns:       event.Properties.Patterns,
 		AlwaysPatterns: event.Properties.Always,
+		CallID:         event.Properties.Tool.CallID,
 	}, true
 }
 
@@ -366,6 +385,7 @@ func parseLegacyPermission(payload json.RawMessage) (permissionEvent, bool) {
 			Pattern   any    `json:"pattern"`
 			SessionID string `json:"sessionID"`
 			Title     string `json:"title"`
+			CallID    string `json:"callID"`
 		} `json:"properties"`
 	}
 	if json.Unmarshal(payload, &event) != nil || event.Properties.ID == "" || event.Properties.SessionID == "" {
@@ -379,6 +399,7 @@ func parseLegacyPermission(payload json.RawMessage) (permissionEvent, bool) {
 		PermissionType: event.Properties.Type,
 		Patterns:       patterns,
 		AlwaysPatterns: patterns,
+		CallID:         event.Properties.CallID,
 	}, true
 }
 

@@ -642,8 +642,8 @@ func TestServerOptionsAndTimeouts(t *testing.T) {
 	if _, err := NewHandler(&fakeService{}, Options{Token: testToken, TLSCertFile: "cert.pem"}); err == nil {
 		t.Fatal("incomplete TLS pair accepted")
 	}
-	if _, err := NewHandler(&fakeService{}, Options{ListenAddress: "0.0.0.0:8787", Token: testToken}); err == nil {
-		t.Fatal("non-loopback listener without TLS accepted")
+	if _, err := NewHandler(&fakeService{}, Options{ListenAddress: "0.0.0.0:8787", Token: testToken}); err != nil {
+		t.Fatal("non-loopback listener should not require TLS")
 	}
 	server, err := NewServer(&fakeService{}, Options{Token: testToken})
 	if err != nil {
@@ -676,7 +676,7 @@ func waitForJobStatus(t *testing.T, handler http.Handler, id string, wanted doma
 	return domain.Job{}
 }
 
-func TestNotifyIngestRoutesRequireAuthAndAcceptHooks(t *testing.T) {
+func TestNotifyIngestRoutesArePublicAndOtherRoutesStayAuthenticated(t *testing.T) {
 	var sent []notify.Notification
 	ingest := notify.NewIngest(notifySenderFunc(func(n notify.Notification) {
 		sent = append(sent, n)
@@ -684,15 +684,19 @@ func TestNotifyIngestRoutesRequireAuthAndAcceptHooks(t *testing.T) {
 	handler := newTestHandler(t, &fakeService{}, func(options *Options) {
 		options.NotifyIngest = ingest
 	})
-	unauthorized := request(handler, http.MethodPost, "/v1/notify", `{"type":"idle","sessionId":"s1"}`, "", "application/json")
-	if unauthorized.Code != http.StatusUnauthorized {
-		t.Fatalf("unauthorized status = %d", unauthorized.Code)
+	projects := request(handler, http.MethodGet, "/v1/projects", "", "", "")
+	if projects.Code != http.StatusUnauthorized {
+		t.Fatalf("projects without a token status = %d, want 401", projects.Code)
 	}
-	accepted := request(handler, http.MethodPost, "/v1/claude-code/hook", `{"hook_event_name":"Stop","session_id":"s1","cwd":"/repos/op"}`, testToken, "application/json")
+	notifyRoute := request(handler, http.MethodPost, "/v1/notify", `{"type":"idle","sessionId":"s1"}`, "", "application/json")
+	if notifyRoute.Code != http.StatusOK {
+		t.Fatalf("public notify status = %d body = %s", notifyRoute.Code, notifyRoute.Body.String())
+	}
+	accepted := request(handler, http.MethodPost, "/v1/claude-code/hook", `{"hook_event_name":"Stop","session_id":"s1","cwd":"/repos/op"}`, "", "application/json")
 	if accepted.Code != http.StatusOK || !strings.Contains(accepted.Body.String(), `"ok":true`) {
 		t.Fatalf("hook status = %d body = %s", accepted.Code, accepted.Body.String())
 	}
-	if len(sent) != 1 || sent[0].Type != notify.TypeIdle || sent[0].Source != notify.SourceClaudeCode {
+	if len(sent) != 2 || sent[0].Type != notify.TypeIdle || sent[0].SessionID != "s1" || sent[1].Source != notify.SourceClaudeCode {
 		t.Fatalf("sent = %+v", sent)
 	}
 }

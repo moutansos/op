@@ -297,7 +297,6 @@ func TestValidateRejectsInvalidValues(t *testing.T) {
 		{name: "invalid opener mode", field: "projectOpeners[0].mode", edit: func(c *Config) { c.ProjectOpeners[0].Mode = "terminal" }},
 		{name: "listen", field: "server.listen", edit: func(c *Config) { c.Server.Listen = "localhost" }},
 		{name: "tls pair", field: "server", edit: func(c *Config) { c.Server.TLSCertFile = filepath.Join(t.TempDir(), "cert") }},
-		{name: "non-loopback tls", field: "server", edit: func(c *Config) { c.Server.Listen = "0.0.0.0:8787" }},
 		{name: "entry path", field: "customEntries[0].paths.linux", edit: func(c *Config) { c.CustomEntries[0].Paths.Linux = "relative" }},
 		{name: "duplicate entry", field: "customEntries[1].name", edit: func(c *Config) { c.CustomEntries = append(c.CustomEntries, c.CustomEntries[0]) }},
 		{name: "empty command", field: "customCommands[0].command", edit: func(c *Config) { c.CustomCommands[0].Command = "" }},
@@ -495,7 +494,7 @@ func TestMigrateReadsNotificationsBlock(t *testing.T) {
 			"debounce":"5s",
 			"ignoreDirectories":["/tmp"],
 			"opencode":{"baseUrl":"http://127.0.0.1:4096","desktopBaseUrl":"https://oc.example"},
-			"opencode2":{"enabled":true,"desktopBaseUrl":"https://oc2.example"},
+			"opencode2":{"enabled":true,"desktopBaseUrl":"https://oc2.example","serverUrl":"https://oc2-public.example"},
 			"ingest":{"enabled":true},
 			"providers":[{"type":"discord","enabled":true,"webhookUrl":"https://discord.com/api/webhooks/x"}]
 		}
@@ -513,7 +512,7 @@ func TestMigrateReadsNotificationsBlock(t *testing.T) {
 	if !config.Notifications.Ingest.Enabled || config.Notifications.OpenCode.BaseURL != "http://127.0.0.1:4096" {
 		t.Fatalf("opencode/ingest = %#v %#v", config.Notifications.OpenCode, config.Notifications.Ingest)
 	}
-	if !config.Notifications.OpenCode2.Enabled || config.Notifications.OpenCode2.DesktopBaseURL != "https://oc2.example" {
+	if !config.Notifications.OpenCode2.Enabled || config.Notifications.OpenCode2.DesktopBaseURL != "https://oc2.example" || config.Notifications.OpenCode2.ServerURL != "https://oc2-public.example" {
 		t.Fatalf("opencode2 = %#v", config.Notifications.OpenCode2)
 	}
 	if len(config.Notifications.Providers) != 1 || config.Notifications.Providers[0].Type != "discord" {
@@ -534,6 +533,11 @@ func TestValidateRejectsBadNotificationConfiguration(t *testing.T) {
 			c.Notifications.Enabled = true
 			c.Notifications.OpenCode2.Enabled = true
 			c.Notifications.OpenCode2.BaseURL = "not-a-url"
+		},
+		"bad opencode2 server url": func(c *Config) {
+			c.Notifications.Enabled = true
+			c.Notifications.OpenCode2.Enabled = true
+			c.Notifications.OpenCode2.ServerURL = "not-a-url"
 		},
 		"username only": func(c *Config) {
 			c.Notifications.Enabled = true

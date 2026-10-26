@@ -26,7 +26,7 @@ Subagent-scoped payloads (`agent_id` present) are ignored server-side.
 
 ## Prerequisites
 
-1. op running with `ingest.enabled: true` (default port **4100**)
+1. `op serve` running with `notifications.ingest.enabled: true` (default `127.0.0.1:8787`)
 2. **`bash` and `curl` on `PATH`** (required; the forwarder is a bash script)
 3. Codex CLI with hooks enabled (default: `[features] hooks = true`)
 
@@ -36,15 +36,15 @@ available. The installer sets `commandWindows` to invoke the script via bash.
 ## Install
 
 ```bash
-bun run install-codex-plugin
-# → installs scripts under ~/.codex/hooks/op
+op notify install-codex
+# → installs scripts under ~/.codex/hooks/oc-notifier
 # → merges Stop + PermissionRequest into ~/.codex/hooks.json
 ```
 
 Then in Codex:
 
 1. Run `/hooks`, review, and **trust** the new op hooks
-2. Optional: `export OC_NOTIFIER_URL=http://127.0.0.1:8787` and/or `OC_NOTIFIER_TOKEN`
+2. Optional: `export OC_NOTIFIER_URL=http://127.0.0.1:8787` when serve listens elsewhere. Ingest does not need `OC_NOTIFIER_TOKEN`
 
 Re-running the installer is safe: it upgrades the scripts and replaces only
 the op entries in `hooks.json` (identified by `statusMessage:

@@ -153,13 +153,8 @@ func validateOptions(options Options) error {
 	if (options.TLSCertFile == "") != (options.TLSKeyFile == "") {
 		return errors.New("server: TLS certificate and key must be configured together")
 	}
-	if !isLoopbackHost(host) {
-		if options.Token == "" {
-			return errors.New("server: bearer authentication is required for a non-loopback listener")
-		}
-		if options.TLSCertFile == "" {
-			return errors.New("server: TLS is required for a non-loopback listener")
-		}
+	if !isLoopbackHost(host) && options.Token == "" {
+		return errors.New("server: bearer authentication is required for a non-loopback listener")
 	}
 	if options.MaxBodyBytes <= 0 {
 		return errors.New("server: maximum body size must be greater than zero")
@@ -201,11 +196,13 @@ func (h *Handler) routes() {
 	h.mux.Handle("POST /v1/projects/{id}/open", h.authenticate(http.HandlerFunc(h.openProject)))
 	h.mux.Handle("POST /v1/projects/{id}/worktrees", h.authenticate(http.HandlerFunc(h.createWorktree)))
 	if h.options.NotifyIngest != nil {
-		h.mux.Handle("POST /v1/notify", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleNotify)))
-		h.mux.Handle("POST /v1/claude-code/hook", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleClaudeCodeHook)))
-		h.mux.Handle("POST /v1/grok-code/hook", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleGrokCodeHook)))
-		h.mux.Handle("POST /v1/codex/hook", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleCodexHook)))
-		h.mux.Handle("POST /v1/copilot-cli/hook", h.authenticate(http.HandlerFunc(h.options.NotifyIngest.HandleCopilotCLIHook)))
+		// Hook and parent-forward ingest match the old oc-notifier listener:
+		// reachable without the API token. Every other route stays authenticated.
+		h.mux.Handle("POST /v1/notify", http.HandlerFunc(h.options.NotifyIngest.HandleNotify))
+		h.mux.Handle("POST /v1/claude-code/hook", http.HandlerFunc(h.options.NotifyIngest.HandleClaudeCodeHook))
+		h.mux.Handle("POST /v1/grok-code/hook", http.HandlerFunc(h.options.NotifyIngest.HandleGrokCodeHook))
+		h.mux.Handle("POST /v1/codex/hook", http.HandlerFunc(h.options.NotifyIngest.HandleCodexHook))
+		h.mux.Handle("POST /v1/copilot-cli/hook", http.HandlerFunc(h.options.NotifyIngest.HandleCopilotCLIHook))
 	}
 
 	h.mux.HandleFunc("GET /openapi.json", h.openAPI)

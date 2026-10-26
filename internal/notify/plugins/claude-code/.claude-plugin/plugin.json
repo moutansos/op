@@ -14,14 +14,14 @@
     "notifier_url": {
       "type": "string",
       "title": "op ingest URL",
-      "description": "Base URL of the op serve HTTP API (no trailing slash)",
+      "description": "Base URL of the op serve HTTP API (no trailing slash). Hooks POST to /v1/claude-code/hook.",
       "default": "http://127.0.0.1:8787",
       "required": true
     },
     "token": {
       "type": "string",
       "title": "Auth token",
-      "description": "Bearer token matching the op serve API token",
+      "description": "Optional bearer token. op serve ingest does not require one; set this only if a proxy in front of it does",
       "sensitive": true,
       "required": false
     }

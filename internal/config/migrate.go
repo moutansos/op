@@ -69,6 +69,7 @@ type rawNotificationsOpenCode2Config struct {
 	Enabled        *bool   `json:"enabled"`
 	BaseURL        *string `json:"baseUrl"`
 	DesktopBaseURL *string `json:"desktopBaseUrl"`
+	ServerURL      *string `json:"serverUrl"`
 	Password       *string `json:"password"`
 }
 
@@ -278,6 +279,9 @@ func applyNotifications(target *NotificationsConfig, raw *rawNotificationsConfig
 		if raw.OpenCode2.DesktopBaseURL != nil {
 			target.OpenCode2.DesktopBaseURL = *raw.OpenCode2.DesktopBaseURL
 		}
+		if raw.OpenCode2.ServerURL != nil {
+			target.OpenCode2.ServerURL = *raw.OpenCode2.ServerURL
+		}
 		if raw.OpenCode2.Password != nil {
 			target.OpenCode2.Password = *raw.OpenCode2.Password
 		}
@@ -335,7 +339,7 @@ func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	collectAgentDefinitionUnknown(root["agents"], &warnings)
 	collectObjectUnknown(root["notifications"], "notifications", set("enabled", "debounce", "ignoreDirectories", "opencode", "opencode2", "ingest", "providers"), &warnings)
 	collectObjectUnknown(notificationsObject(root["notifications"])["opencode"], "notifications.opencode", set("baseUrl", "desktopBaseUrl", "username", "password"), &warnings)
-	collectObjectUnknown(notificationsObject(root["notifications"])["opencode2"], "notifications.opencode2", set("enabled", "baseUrl", "desktopBaseUrl", "password"), &warnings)
+	collectObjectUnknown(notificationsObject(root["notifications"])["opencode2"], "notifications.opencode2", set("enabled", "baseUrl", "desktopBaseUrl", "serverUrl", "password"), &warnings)
 	collectObjectUnknown(notificationsObject(root["notifications"])["ingest"], "notifications.ingest", set("enabled"), &warnings)
 	collectArrayUnknown(notificationsObject(root["notifications"])["providers"], "notifications.providers", set("type", "enabled", "webhookUrl", "url", "method", "headers", "token", "maxHops", "timeout"), "", nil, &warnings)
 	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "token", "tokenFile", "tlsCertFile", "tlsKeyFile", "state"), &warnings)

@@ -42,23 +42,26 @@ Subagent events (`agent_id` present) are ignored by op.
 
 ## Enable ingest on op
 
-Add to your `config.json`:
+In `~/.config/op/config.json`, enable notifications and ingest, then run `op serve`.
+Hook routes share the serve listener and its bearer token:
 
 ```json
 {
-  "ingest": {
+  "notifications": {
     "enabled": true,
-    "host": "127.0.0.1",
-    "port": 4100,
-    "token": "optional-shared-secret"
+    "ingest": { "enabled": true },
+    "providers": [
+      {
+        "type": "discord",
+        "enabled": true,
+        "webhookUrl": "https://discord.com/api/webhooks/..."
+      }
+    ]
   },
-  "providers": [
-    {
-      "type": "discord",
-      "enabled": true,
-      "webhookUrl": "https://discord.com/api/webhooks/..."
-    }
-  ]
+  "server": {
+    "listen": "127.0.0.1:8787",
+    "tokenFile": "~/.config/op/server-token"
+  }
 }
 ```
 
@@ -66,46 +69,19 @@ Add to your `config.json`:
 
 ## Install the plugin
 
-### Recommended: op CLI
-
-From the op repo:
-
 ```bash
-# Linux/macOS → symlink  |  Windows → copy
-# Installs to ~/.claude/skills/op
-# Safe to re-run for upgrades — replaces an existing install
-bun run install-claude-plugin
-
-# Optional overrides
-bun run src/index.ts --install-claude-plugin \
-  --plugin-source ./claude-code-plugin \
-  --plugin-target ~/.claude/skills/op
+op notify install-claude
 ```
 
-Then restart Claude Code (or run `/reload-plugins`).
-
-### Session-only (no install)
-
-```bash
-claude --plugin-dir /path/to/op/claude-code-plugin
-```
-
-### Manual skills-directory install
-
-```bash
-# Linux/macOS
-ln -s /path/to/op/claude-code-plugin ~/.claude/skills/op
-
-# Windows (PowerShell) — copy instead of symlink
-Copy-Item -Recurse .\claude-code-plugin $env:USERPROFILE\.claude\skills\op
-```
+That extracts the plugin to `~/.claude/skills/oc-notifier`. Re-run it to upgrade.
+Then restart Claude Code or run `/reload-plugins`.
 
 When enabling, Claude Code prompts for:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| **op URL** | Base URL of the ingest API | `http://127.0.0.1:8787` |
-| **Auth token** | Optional bearer token matching `ingest.token` | _(empty)_ |
+| **op URL** | Base URL of `op serve` | `http://127.0.0.1:8787` |
+| **Auth token** | Optional. Ingest does not require the op API token | _(empty)_ |
 
 ## Verify
 

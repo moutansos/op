@@ -47,6 +47,7 @@ func New(options Options) (*Service, error) {
 	if options.OpenCode2.Enabled {
 		client := newOpenCode2Client(options.OpenCode2, logger)
 		service.monitor2 = newMonitor(client, notifier, options.OpenCode2.DesktopBaseURL, options.Debounce, SourceOpenCode2, logger)
+		service.monitor2.serverURL = client.publicServerURL()
 	}
 	return service, nil
 }

@@ -133,7 +133,11 @@ type NotificationsOpenCode2Config struct {
 	Enabled        bool   `json:"enabled"`
 	BaseURL        string `json:"baseUrl"`
 	DesktopBaseURL string `json:"desktopBaseUrl"`
-	Password       string `json:"password"`
+	// ServerURL is the public URL of this OpenCode 2 server as the web UI
+	// identifies it. Session links are /server/{base64(serverUrl)}/session/{id}.
+	// Empty uses the resolved baseUrl.
+	ServerURL string `json:"serverUrl"`
+	Password  string `json:"password"`
 }
 
 // NotificationsIngestConfig accepts hook payloads on the existing serve listener.
