@@ -507,13 +507,13 @@ func notifyInstallNextSteps(kind notify.InstallKind, listen string) string {
 	url := "http://" + listen
 	switch kind {
 	case notify.InstallClaude:
-		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. Restart Claude Code or run /reload-plugins\n  3. Set the plugin notifier URL to " + url + " and the token to the op API token"
+		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. Restart Claude Code or run /reload-plugins\n  3. Set the plugin notifier URL to " + url + " (ingest does not need the API token)"
 	case notify.InstallGrok:
-		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. Restart Grok or run /plugins reload\n  3. export OC_NOTIFIER_URL=" + url + " OC_NOTIFIER_TOKEN=<op API token>"
+		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. Restart Grok or run /plugins reload\n  3. export OC_NOTIFIER_URL=" + url + " when serve is not on 127.0.0.1:8787"
 	case notify.InstallCodex:
-		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. In Codex, run /hooks and trust the oc-notifier Stop + PermissionRequest hooks\n  3. export OC_NOTIFIER_URL=" + url + " OC_NOTIFIER_TOKEN=<op API token>"
+		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. In Codex, run /hooks and trust the oc-notifier Stop + PermissionRequest hooks\n  3. export OC_NOTIFIER_URL=" + url + " when serve is not on 127.0.0.1:8787"
 	default:
-		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. Restart Copilot CLI so hooks reload\n  3. export OC_NOTIFIER_URL=" + url + " OC_NOTIFIER_TOKEN=<op API token>"
+		return "Next steps:\n  1. Enable notifications.ingest and run op serve\n  2. Restart Copilot CLI so hooks reload\n  3. export OC_NOTIFIER_URL=" + url + " when serve is not on 127.0.0.1:8787"
 	}
 }
 

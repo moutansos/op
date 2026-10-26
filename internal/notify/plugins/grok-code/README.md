@@ -55,8 +55,8 @@ op notify install-grok
 # → ~/.grok/plugins/oc-notifier (auto-trusted)
 ```
 
-Optional env: `OC_NOTIFIER_URL` (default `http://127.0.0.1:8787`), `OC_NOTIFIER_TOKEN`
-(the op serve API token). Session titles are read from
+Optional env: `OC_NOTIFIER_URL` (default `http://127.0.0.1:8787`). Ingest does not
+need `OC_NOTIFIER_TOKEN`. Session titles are read from
 `$GROK_HOME/sessions/.../summary.json` on the machine running `op serve`.
 
 Restart Grok or `/plugins reload` after install.

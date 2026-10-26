@@ -44,7 +44,7 @@ op notify install-codex
 Then in Codex:
 
 1. Run `/hooks`, review, and **trust** the new op hooks
-2. Optional: `export OC_NOTIFIER_URL=http://127.0.0.1:8787` and/or `OC_NOTIFIER_TOKEN`
+2. Optional: `export OC_NOTIFIER_URL=http://127.0.0.1:8787` when serve listens elsewhere. Ingest does not need `OC_NOTIFIER_TOKEN`
 
 Re-running the installer is safe: it upgrades the scripts and replaces only
 the op entries in `hooks.json` (identified by `statusMessage:

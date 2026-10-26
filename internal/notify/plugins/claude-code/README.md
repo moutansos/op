@@ -81,7 +81,7 @@ When enabling, Claude Code prompts for:
 | Option | Description | Default |
 |--------|-------------|---------|
 | **op URL** | Base URL of `op serve` | `http://127.0.0.1:8787` |
-| **Auth token** | Bearer token matching the op API token | _(empty)_ |
+| **Auth token** | Optional. Ingest does not require the op API token | _(empty)_ |
 
 ## Verify
 

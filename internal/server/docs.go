@@ -69,11 +69,11 @@ var openAPIDocument = []byte(`{
     "/v1/tmux/panes/{id}/select": {"post": {"security": [{"bearerAuth": []}], "summary": "Select a managed tmux pane", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}, "description": "Canonical tmux pane ID such as %12"}], "responses": {"200": {"description": "Selected"}, "404": {"description": "Pane not found"}}}},
     "/v1/stats": {"get": {"security": [{"bearerAuth": []}], "summary": "Get host, process, and agent classification snapshot", "responses": {"200": {"description": "Snapshot"}}}},
     "/v1/jobs/{id}": {"get": {"security": [{"bearerAuth": []}], "summary": "Get a job", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Job", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Job"}}}}, "404": {"description": "Not found"}}}},
-    "/v1/notify": {"post": {"security": [{"bearerAuth": []}], "summary": "Ingest a normalized notification", "responses": {"200": {"description": "Accepted"}, "401": {"description": "Unauthorized"}}}},
-    "/v1/claude-code/hook": {"post": {"security": [{"bearerAuth": []}], "summary": "Ingest a Claude Code hook payload", "responses": {"200": {"description": "Accepted"}, "401": {"description": "Unauthorized"}}}},
-    "/v1/grok-code/hook": {"post": {"security": [{"bearerAuth": []}], "summary": "Ingest a Grok hook payload", "responses": {"200": {"description": "Accepted"}, "401": {"description": "Unauthorized"}}}},
-    "/v1/codex/hook": {"post": {"security": [{"bearerAuth": []}], "summary": "Ingest a Codex hook payload", "responses": {"200": {"description": "Accepted"}, "401": {"description": "Unauthorized"}}}},
-    "/v1/copilot-cli/hook": {"post": {"security": [{"bearerAuth": []}], "summary": "Ingest a Copilot CLI hook payload", "responses": {"200": {"description": "Accepted"}, "401": {"description": "Unauthorized"}}}}
+    "/v1/notify": {"post": {"summary": "Ingest a normalized notification", "description": "Public. Does not require the API bearer token.", "responses": {"200": {"description": "Accepted"}}}},
+    "/v1/claude-code/hook": {"post": {"summary": "Ingest a Claude Code hook payload", "description": "Public. Does not require the API bearer token.", "responses": {"200": {"description": "Accepted"}}}},
+    "/v1/grok-code/hook": {"post": {"summary": "Ingest a Grok hook payload", "description": "Public. Does not require the API bearer token.", "responses": {"200": {"description": "Accepted"}}}},
+    "/v1/codex/hook": {"post": {"summary": "Ingest a Codex hook payload", "description": "Public. Does not require the API bearer token.", "responses": {"200": {"description": "Accepted"}}}},
+    "/v1/copilot-cli/hook": {"post": {"summary": "Ingest a Copilot CLI hook payload", "description": "Public. Does not require the API bearer token.", "responses": {"200": {"description": "Accepted"}}}}
   }
 }
 `)

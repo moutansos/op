@@ -64,7 +64,7 @@ instead.
 Then:
 
 1. **Restart Copilot CLI** (hooks load at startup)
-2. Optional: `export OC_NOTIFIER_URL=http://127.0.0.1:8787` and/or `OC_NOTIFIER_TOKEN`
+2. Optional: `export OC_NOTIFIER_URL=http://127.0.0.1:8787` when serve listens elsewhere. Ingest does not need `OC_NOTIFIER_TOKEN`
 
 Re-running the installer is safe: it upgrades the scripts and rewrites only
 `op.json`.

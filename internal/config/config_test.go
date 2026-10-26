@@ -297,7 +297,6 @@ func TestValidateRejectsInvalidValues(t *testing.T) {
 		{name: "invalid opener mode", field: "projectOpeners[0].mode", edit: func(c *Config) { c.ProjectOpeners[0].Mode = "terminal" }},
 		{name: "listen", field: "server.listen", edit: func(c *Config) { c.Server.Listen = "localhost" }},
 		{name: "tls pair", field: "server", edit: func(c *Config) { c.Server.TLSCertFile = filepath.Join(t.TempDir(), "cert") }},
-		{name: "non-loopback tls", field: "server", edit: func(c *Config) { c.Server.Listen = "0.0.0.0:8787" }},
 		{name: "entry path", field: "customEntries[0].paths.linux", edit: func(c *Config) { c.CustomEntries[0].Paths.Linux = "relative" }},
 		{name: "duplicate entry", field: "customEntries[1].name", edit: func(c *Config) { c.CustomEntries = append(c.CustomEntries, c.CustomEntries[0]) }},
 		{name: "empty command", field: "customCommands[0].command", edit: func(c *Config) { c.CustomCommands[0].Command = "" }},

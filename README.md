@@ -451,9 +451,10 @@ inside 15 seconds are dropped as well. Grok session titles are read from
 when a hook is forwarded. Discord cards title the embed `{project} · {session}` and put the harness
 and machine in the webhook username.
 
-Ingest routes share the `op serve` listener and the same bearer token. Plugin forwarders default to
-`http://127.0.0.1:8787`; set `OC_NOTIFIER_URL` / `OC_NOTIFIER_TOKEN` (or the Claude plugin user
-config) to the serve address and API token.
+Ingest routes share the `op serve` listener and do not require its bearer token. Plugin forwarders
+default to `http://127.0.0.1:8787`. Set `OC_NOTIFIER_URL` (or the Claude plugin user config) when
+`op serve` listens somewhere else. `OC_NOTIFIER_TOKEN` is optional and only needed if a front door
+in front of `op` requires one.
 
 ```sh
 op notify install-claude
@@ -663,18 +664,20 @@ op serve
 `OP_API_TOKEN` takes precedence over `server.token` in `config.json`, followed by
 `server.tokenFile`. Set `server.enabled: true` to host the same server in the dashboard;
 `op serve` hosts independently. A non-empty token is required even on
-loopback, and every `/v1/...` route requires `Authorization: Bearer <token>`. OpenAPI and Swagger
-documentation routes are public but do not perform operations.
+loopback, and every `/v1/...` route except notification ingest requires
+`Authorization: Bearer <token>`. OpenAPI and Swagger documentation routes are public but do not
+perform operations.
 
-The listener defaults to `127.0.0.1:8787`. A non-loopback listener, including `0.0.0.0`, requires
-all of the following or configuration/startup fails:
+Notification ingest is public so agent hooks can post without the API token:
+`POST /v1/notify`, `/v1/claude-code/hook`, `/v1/grok-code/hook`, `/v1/codex/hook`, and
+`/v1/copilot-cli/hook`. They are registered only when `notifications.ingest.enabled` is true.
+Everything else on the listener stays authenticated, including project open, which executes commands
+on the host.
 
-- A non-empty bearer token.
-- Both `server.tlsCertFile` and `server.tlsKeyFile`.
-- Clients using HTTPS and trusting the configured certificate.
-
-TLS certificate and key paths must be configured together. TLS 1.2 or newer is enforced by the
-server.
+The listener defaults to `127.0.0.1:8787`. A non-loopback listener, including `0.0.0.0`, still
+requires a non-empty bearer token because the authenticated routes are on the same port. TLS is
+optional. Certificate and key paths must be configured together, and TLS 1.2 or newer is enforced
+when they are set.
 
 > **Host remote-code-execution warning:** `POST /v1/projects/{id}/open` starts the configured editor
 > and shell commands on the server host. This is remote code execution by design. Authentication,
@@ -769,8 +772,8 @@ run the user service after logout, an administrator or the user (where permitted
 - **Unsafe name/path error mentioning `-:-`:** rename the configured directory or value; managed
   inputs retain this compatibility restriction even though existing tmux state is read by the raw
   parser.
-- **Server rejects non-loopback configuration:** configure both TLS files and a token, or return
-  `server.listen` to `127.0.0.1:8787` and use SSH forwarding.
+- **Server rejects non-loopback configuration:** set a bearer token. TLS is optional. Return
+  `server.listen` to `127.0.0.1:8787` and use SSH forwarding when the host should not be reachable.
 - **Remote `401 Unauthorized`:** verify exactly one Bearer token is being sent and that the client
   token matches `OP_API_TOKEN`, `server.token`, or the server token file without extra whitespace.
 - **Swagger page is blank offline:** use `/openapi.json`; Swagger UI assets are fetched from

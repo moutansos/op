@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"net"
-	"net/netip"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -299,7 +298,7 @@ func validateServer(server ServerConfig) error {
 			return invalid("server.state.parentEventsUrl", "must be an HTTP(S) endpoint without userinfo or fragment")
 		}
 	}
-	host, portText, err := net.SplitHostPort(server.Listen)
+	_, portText, err := net.SplitHostPort(server.Listen)
 	if err != nil {
 		return invalid("server.listen", "must be a host:port address")
 	}
@@ -321,20 +320,7 @@ func validateServer(server ServerConfig) error {
 			}
 		}
 	}
-	if !isLoopbackHost(host) {
-		if server.TLSCertFile == "" || server.TLSKeyFile == "" {
-			return invalid("server", "TLS is required for a non-loopback listener")
-		}
-	}
 	return nil
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	address, err := netip.ParseAddr(host)
-	return err == nil && address.IsLoopback()
 }
 
 func validateEntries(entries []CustomEntry) error {
