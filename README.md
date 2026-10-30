@@ -68,6 +68,9 @@ Artifacts are written to `.build_output/`. Run `./build.sh --help` for unit, rac
 Windows proxy, cleanup, and argument-forwarding options. `VERSION`, `COMMIT`, and `BUILD_DATE` may
 override the metadata embedded in builds.
 
+On Windows with Go installed, `./build.ps1 -Build` builds the Linux binary and the Windows proxy
+and installs the Linux binary into WSL; see [Windows-to-WSL delegation](docs/windows-wsl.md).
+
 Alternatively, from the checkout, install into `GOBIN` (or `GOPATH/bin`):
 
 ```sh

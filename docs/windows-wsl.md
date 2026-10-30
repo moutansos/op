@@ -39,6 +39,10 @@ $env:GOOS = 'windows'; go build -trimpath -o .build_output/op.exe ./cmd/op
 wsl.exe --cd "$PWD" --exec sh -c 'install -Dm755 .build_output/op "$HOME/.local/bin/op"'
 ```
 
+`./build.ps1 -Build` does the same in one step. It installs the Linux binary to the `op` path
+selected by `OP_WSL_OP` or `%APPDATA%\op\wsl.json` (default `~/.local/bin/op`) in the selected
+distribution. The Windows proxy is written to `.build_output/op.exe` but not installed.
+
 Install `wl-clipboard` and `xclip` in the distribution (`sudo apt install wl-clipboard xclip`).
 The terminal UI library probes `PATH` for clipboard tools when every `op` process starts. When
 none is installed, that probe walks every Windows directory WSL appends to `PATH`, which adds
