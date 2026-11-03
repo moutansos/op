@@ -76,6 +76,19 @@ op notify install-claude
 That extracts the plugin to `~/.claude/skills/oc-notifier`. Re-run it to upgrade.
 Then restart Claude Code or run `/reload-plugins`.
 
+### Windows Claude Code with op in WSL
+
+`op.exe` runs the Linux `op`, so the command above writes to the WSL home. Target the
+Windows profile instead:
+
+```powershell
+op notify install-claude --target /mnt/c/Users/<you>/.claude/skills/oc-notifier
+```
+
+Hooks use shell form, so Claude Code runs them through Git Bash on Windows rather than
+resolving `bash` to WSL's `bash.exe`. WSL forwards Windows `127.0.0.1` to listeners inside
+WSL, so the default URL reaches `op serve`.
+
 When enabling, Claude Code prompts for:
 
 | Option | Description | Default |

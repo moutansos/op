@@ -175,6 +175,28 @@ The process list also shows Windows programs started from each pane, found throu
 the Linux interop stub until restarted; see "Running op From Windows Shells Inside tmux" above.
 Programs running as administrator cannot be inspected and are left out.
 
+## Session Notifications
+
+Run `op serve` as the [systemd user service](../README.md#systemd-user-service) rather than with
+`server.enabled`, which would log every hook over the dashboard. Add Git for Windows to the unit's
+`PATH` so background status refreshes on Windows drives use `git.exe`:
+
+```ini
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/mnt/c/Program Files/Git/cmd"
+```
+
+Claude Code started from a Windows shell reads plugins from the Windows profile, so install its hooks
+there:
+
+```powershell
+op notify install-claude --target /mnt/c/Users/<you>/.claude/skills/oc-notifier
+```
+
+WSL forwards Windows `127.0.0.1` to listeners inside WSL, so the hooks reach `op serve` on its default
+address. The reverse is not true under NAT networking: a Windows OpenCode 2 service bound to
+`127.0.0.1` is unreachable from WSL, so `notifications.opencode2.baseUrl` must name an address the
+service actually listens on.
+
 ## Paths And Terminal Behavior
 
 The current Windows working directory is supplied with WSL's documented `--cd` option. This keeps

@@ -83,12 +83,12 @@ func localHostname() string {
 	return displayHostname("")
 }
 
+// projectName accepts both separators because Windows agents report directories like D:\repos\op.
 func projectName(directory string) string {
-	trimmed := strings.Trim(directory, "/")
-	if trimmed == "" {
+	parts := strings.FieldsFunc(directory, func(r rune) bool { return r == '/' || r == '\\' })
+	if len(parts) == 0 {
 		return ""
 	}
-	parts := strings.Split(trimmed, "/")
 	return parts[len(parts)-1]
 }
 

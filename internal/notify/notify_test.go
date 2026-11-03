@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/moutansos/op/internal/notify/plugins"
 )
 
 func TestDesktopURLMatchesOpenCodeRoute(t *testing.T) {
@@ -183,6 +185,9 @@ func TestClaudeAndCodexHookMapping(t *testing.T) {
 	if got := MapClaudeCodeHook(map[string]any{"hook_event_name": "Stop", "session_id": "s", "cwd": "/repos/op"}); got == nil || got.Type != TypeIdle || got.Source != SourceClaudeCode {
 		t.Fatalf("claude stop = %+v", got)
 	}
+	if got := MapClaudeCodeHook(map[string]any{"hook_event_name": "Stop", "session_id": "s", "cwd": `D:\source\repos\op`}); got == nil || got.SessionTitle != "op" {
+		t.Fatalf("windows claude stop = %+v", got)
+	}
 	if got := MapClaudeCodeHook(map[string]any{"hook_event_name": "Stop", "session_id": "s", "agent_id": "sub"}); got != nil {
 		t.Fatalf("subagent stop should be ignored: %+v", got)
 	}
@@ -216,6 +221,36 @@ func TestInstallClaudePluginExtractsForwarder(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "127.0.0.1:8787") {
 		t.Fatalf("forwarder still points at the old default: %s", data)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "oc-notifier", ".claude-plugin", "plugin.json")); err != nil {
+		t.Fatalf("plugin manifest missing: %v", err)
+	}
+}
+
+// Exec form resolves bare "bash" on Windows PATH, which is often WSL's
+// bash.exe; shell form runs through Git Bash there and sh elsewhere.
+func TestClaudeHooksUseShellForm(t *testing.T) {
+	data, err := plugins.FS.ReadFile("claude-code/hooks/hooks.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Hooks map[string][]struct {
+			Hooks []map[string]any `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	want := `bash "${CLAUDE_PLUGIN_ROOT}/scripts/forward.sh"`
+	for event, groups := range manifest.Hooks {
+		for _, group := range groups {
+			for _, handler := range group.Hooks {
+				if _, ok := handler["args"]; ok || handler["command"] != want || handler["async"] != true {
+					t.Fatalf("%s handler = %v, want async shell form %q", event, handler, want)
+				}
+			}
+		}
 	}
 }
 
