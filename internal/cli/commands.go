@@ -433,6 +433,7 @@ func notifyOptions(config config.NotificationsConfig, logger *slog.Logger) notif
 			DesktopBaseURL: config.OpenCode2.DesktopBaseURL,
 			ServerURL:      config.OpenCode2.ServerURL,
 			Password:       config.OpenCode2.Password,
+			WindowsHost:    config.OpenCode2.WindowsHost,
 		},
 		Providers: providers,
 		Logger:    logger,

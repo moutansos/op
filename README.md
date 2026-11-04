@@ -260,7 +260,8 @@ The canonical file is JSON:
       "baseUrl": "",
       "desktopBaseUrl": "",
       "serverUrl": "",
-      "password": ""
+      "password": "",
+      "windowsHost": false
     },
     "ingest": {
       "enabled": false
@@ -439,7 +440,9 @@ OpenCode 1 and OpenCode 2 can be watched together. `notifications.opencode` is t
 (`http://127.0.0.1:4096` by convention). `notifications.opencode2.enabled` watches the v2 background
 service; leave `baseUrl` and `password` empty to discover them from
 `~/.local/state/opencode/service.json` (or `$XDG_STATE_HOME/opencode/service.json`). Set them
-explicitly to pin a specific v2 server. v2 auth is HTTP Basic with username `opencode`.
+explicitly to pin a specific v2 server. v2 auth is HTTP Basic with username `opencode`. When `op` runs
+in WSL and the v2 service runs on Windows, set `notifications.opencode2.windowsHost` to make requests
+through Windows' `curl.exe`; see [Windows-to-WSL delegation](docs/windows-wsl.md#session-notifications).
 
 v1 desktop links are `{desktopBaseUrl}/{base64url(directory)}/session/{id}`. v2 links are
 `{desktopBaseUrl}/server/{base64url(serverUrl)}/session/{id}` because the shared web UI can talk to

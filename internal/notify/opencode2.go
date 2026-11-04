@@ -24,6 +24,7 @@ type OpenCode2Config struct {
 	ServerURL      string
 	Password       string
 	ServiceFile    string
+	WindowsHost    bool
 }
 
 type openCode2ServiceFile struct {
@@ -38,6 +39,8 @@ type openCode2Client struct {
 	serviceFile string
 	client      *http.Client
 	logger      *slog.Logger
+	minDelay    time.Duration
+	maxDelay    time.Duration
 }
 
 type v2WireEvent struct {
@@ -58,13 +61,19 @@ func newOpenCode2Client(config OpenCode2Config, logger *slog.Logger) *openCode2C
 	if serviceFile == "" {
 		serviceFile = defaultOpenCode2ServiceFile()
 	}
+	client := &http.Client{}
+	if config.WindowsHost {
+		client.Transport = &curlTransport{}
+	}
 	return &openCode2Client{
 		baseURL:     strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"),
 		serverURL:   strings.TrimSpace(config.ServerURL),
 		password:    config.Password,
 		serviceFile: serviceFile,
-		client:      &http.Client{},
+		client:      client,
 		logger:      logger,
+		minDelay:    time.Second,
+		maxDelay:    30 * time.Second,
 	}
 }
 
@@ -260,16 +269,27 @@ func (c *openCode2Client) confirmIdle(ctx context.Context, sessionID string) boo
 	return !active
 }
 
+// watch reconnects until ctx ends. The backoff restarts after any connection
+// the server accepted, so a stream that drops after hours retries promptly.
 func (c *openCode2Client) watch(ctx context.Context, handle func(string, json.RawMessage)) error {
-	delay := time.Second
-	const maxDelay = 30 * time.Second
+	minDelay, maxDelay := c.minDelay, c.maxDelay
+	if minDelay <= 0 {
+		minDelay = time.Second
+	}
+	if maxDelay < minDelay {
+		maxDelay = max(30*time.Second, minDelay)
+	}
+	delay := minDelay
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := c.connect(ctx, handle)
+		connected, err := c.connect(ctx, handle)
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if connected {
+			delay = minDelay
 		}
 		c.log().Error("opencode2 sse disconnected", "err", err, "reconnect", delay)
 		timer := time.NewTimer(delay)
@@ -288,28 +308,30 @@ func (c *openCode2Client) watch(ctx context.Context, handle func(string, json.Ra
 	}
 }
 
-func (c *openCode2Client) connect(ctx context.Context, handle func(string, json.RawMessage)) error {
+// connect reports whether the server accepted the stream, even when it later
+// ended with an error.
+func (c *openCode2Client) connect(ctx context.Context, handle func(string, json.RawMessage)) (bool, error) {
 	baseURL, password, err := c.resolve()
 	if err != nil {
-		return err
+		return false, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/event", nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	c.authorize(request, password)
 	request.Header.Set("Accept", "text/event-stream")
 	response, err := c.client.Do(request)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-		return fmt.Errorf("sse connection failed: %s %s", response.Status, strings.TrimSpace(string(body)))
+		return false, fmt.Errorf("sse connection failed: %s %s", response.Status, strings.TrimSpace(string(body)))
 	}
 	c.log().Info("connected to opencode2 sse", "url", baseURL+"/api/event")
-	return readSSE(response.Body, func(data string) {
+	return true, readSSE(response.Body, func(data string) {
 		directory, payload, ok := translateV2Event([]byte(data))
 		if !ok {
 			return

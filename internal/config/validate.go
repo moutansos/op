@@ -208,6 +208,8 @@ func validateNotifications(config NotificationsConfig) error {
 		if err := requireHTTPURL("notifications.opencode2.baseUrl", config.OpenCode2.BaseURL); err != nil {
 			return err
 		}
+	} else if config.OpenCode2.Enabled && config.OpenCode2.WindowsHost {
+		return invalid("notifications.opencode2.baseUrl", "is required when windowsHost is true")
 	}
 	if strings.TrimSpace(config.OpenCode2.DesktopBaseURL) != "" {
 		if err := requireHTTPURL("notifications.opencode2.desktopBaseUrl", config.OpenCode2.DesktopBaseURL); err != nil {

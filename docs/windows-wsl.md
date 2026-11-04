@@ -193,9 +193,24 @@ op notify install-claude --target /mnt/c/Users/<you>/.claude/skills/oc-notifier
 ```
 
 WSL forwards Windows `127.0.0.1` to listeners inside WSL, so the hooks reach `op serve` on its default
-address. The reverse is not true under NAT networking: a Windows OpenCode 2 service bound to
-`127.0.0.1` is unreachable from WSL, so `notifications.opencode2.baseUrl` must name an address the
-service actually listens on.
+address. The reverse is not true under NAT networking: Linux cannot connect to a Windows service, and
+the Windows firewall drops connections from WSL to the host's other addresses. To watch an OpenCode 2
+service running on Windows, set `windowsHost` and point `baseUrl` at the address Windows uses:
+
+```json
+"opencode2": {
+  "enabled": true,
+  "windowsHost": true,
+  "baseUrl": "http://127.0.0.1:28894",
+  "password": "..."
+}
+```
+
+`op` then makes each OpenCode 2 request through Windows' `curl.exe`, found on `PATH` or under
+`/mnt/*/Windows/System32`, and reads the response from its stdout. The URL and credentials reach
+`curl.exe` on stdin, not its command line. If `curl.exe` exits mid-stream, `op` logs curl's error and
+reconnects, starting again from a one second delay. `baseUrl` is required because `op` cannot read the
+Windows service registration.
 
 ## Paths And Terminal Behavior
 

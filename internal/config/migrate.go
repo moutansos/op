@@ -71,6 +71,7 @@ type rawNotificationsOpenCode2Config struct {
 	DesktopBaseURL *string `json:"desktopBaseUrl"`
 	ServerURL      *string `json:"serverUrl"`
 	Password       *string `json:"password"`
+	WindowsHost    *bool   `json:"windowsHost"`
 }
 
 type rawNotificationsIngestConfig struct {
@@ -285,6 +286,9 @@ func applyNotifications(target *NotificationsConfig, raw *rawNotificationsConfig
 		if raw.OpenCode2.Password != nil {
 			target.OpenCode2.Password = *raw.OpenCode2.Password
 		}
+		if raw.OpenCode2.WindowsHost != nil {
+			target.OpenCode2.WindowsHost = *raw.OpenCode2.WindowsHost
+		}
 	}
 	if raw.Ingest != nil && raw.Ingest.Enabled != nil {
 		target.Ingest.Enabled = *raw.Ingest.Enabled
@@ -339,7 +343,7 @@ func unknownFieldWarnings(root map[string]json.RawMessage) []Warning {
 	collectAgentDefinitionUnknown(root["agents"], &warnings)
 	collectObjectUnknown(root["notifications"], "notifications", set("enabled", "debounce", "ignoreDirectories", "opencode", "opencode2", "ingest", "providers"), &warnings)
 	collectObjectUnknown(notificationsObject(root["notifications"])["opencode"], "notifications.opencode", set("baseUrl", "desktopBaseUrl", "username", "password"), &warnings)
-	collectObjectUnknown(notificationsObject(root["notifications"])["opencode2"], "notifications.opencode2", set("enabled", "baseUrl", "desktopBaseUrl", "serverUrl", "password"), &warnings)
+	collectObjectUnknown(notificationsObject(root["notifications"])["opencode2"], "notifications.opencode2", set("enabled", "baseUrl", "desktopBaseUrl", "serverUrl", "password", "windowsHost"), &warnings)
 	collectObjectUnknown(notificationsObject(root["notifications"])["ingest"], "notifications.ingest", set("enabled"), &warnings)
 	collectArrayUnknown(notificationsObject(root["notifications"])["providers"], "notifications.providers", set("type", "enabled", "webhookUrl", "url", "method", "headers", "token", "maxHops", "timeout"), "", nil, &warnings)
 	collectObjectUnknown(root["server"], "server", set("enabled", "listen", "token", "tokenFile", "tlsCertFile", "tlsKeyFile", "state"), &warnings)

@@ -138,6 +138,9 @@ type NotificationsOpenCode2Config struct {
 	// Empty uses the resolved baseUrl.
 	ServerURL string `json:"serverUrl"`
 	Password  string `json:"password"`
+	// WindowsHost sends requests through Windows' curl.exe when op runs in WSL
+	// and the service runs on Windows, so baseUrl resolves on the Windows side.
+	WindowsHost bool `json:"windowsHost,omitempty"`
 }
 
 // NotificationsIngestConfig accepts hook payloads on the existing serve listener.

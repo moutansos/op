@@ -52,7 +52,8 @@
       "baseUrl": "",
       "desktopBaseUrl": "",
       "serverUrl": "",
-      "password": ""
+      "password": "",
+      "windowsHost": false
     },
     "ingest": {
       "enabled": false

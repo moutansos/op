@@ -494,7 +494,7 @@ func TestMigrateReadsNotificationsBlock(t *testing.T) {
 			"debounce":"5s",
 			"ignoreDirectories":["/tmp"],
 			"opencode":{"baseUrl":"http://127.0.0.1:4096","desktopBaseUrl":"https://oc.example"},
-			"opencode2":{"enabled":true,"desktopBaseUrl":"https://oc2.example","serverUrl":"https://oc2-public.example"},
+			"opencode2":{"enabled":true,"desktopBaseUrl":"https://oc2.example","serverUrl":"https://oc2-public.example","windowsHost":true},
 			"ingest":{"enabled":true},
 			"providers":[{"type":"discord","enabled":true,"webhookUrl":"https://discord.com/api/webhooks/x"}]
 		}
@@ -512,7 +512,7 @@ func TestMigrateReadsNotificationsBlock(t *testing.T) {
 	if !config.Notifications.Ingest.Enabled || config.Notifications.OpenCode.BaseURL != "http://127.0.0.1:4096" {
 		t.Fatalf("opencode/ingest = %#v %#v", config.Notifications.OpenCode, config.Notifications.Ingest)
 	}
-	if !config.Notifications.OpenCode2.Enabled || config.Notifications.OpenCode2.DesktopBaseURL != "https://oc2.example" || config.Notifications.OpenCode2.ServerURL != "https://oc2-public.example" {
+	if !config.Notifications.OpenCode2.Enabled || config.Notifications.OpenCode2.DesktopBaseURL != "https://oc2.example" || config.Notifications.OpenCode2.ServerURL != "https://oc2-public.example" || !config.Notifications.OpenCode2.WindowsHost {
 		t.Fatalf("opencode2 = %#v", config.Notifications.OpenCode2)
 	}
 	if len(config.Notifications.Providers) != 1 || config.Notifications.Providers[0].Type != "discord" {
@@ -533,6 +533,11 @@ func TestValidateRejectsBadNotificationConfiguration(t *testing.T) {
 			c.Notifications.Enabled = true
 			c.Notifications.OpenCode2.Enabled = true
 			c.Notifications.OpenCode2.BaseURL = "not-a-url"
+		},
+		"opencode2 windowsHost without base url": func(c *Config) {
+			c.Notifications.Enabled = true
+			c.Notifications.OpenCode2.Enabled = true
+			c.Notifications.OpenCode2.WindowsHost = true
 		},
 		"bad opencode2 server url": func(c *Config) {
 			c.Notifications.Enabled = true
