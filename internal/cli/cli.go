@@ -20,7 +20,9 @@ import (
 	"github.com/moutansos/op/internal/app"
 	"github.com/moutansos/op/internal/config"
 	"github.com/moutansos/op/internal/domain"
+	"github.com/moutansos/op/internal/serveproc"
 	"github.com/moutansos/op/internal/server"
+	"github.com/moutansos/op/internal/systemd"
 	"github.com/moutansos/op/internal/tui"
 )
 
@@ -60,7 +62,16 @@ type Options struct {
 	RunServer     func(context.Context, domain.Service, server.Options) error
 	HTTPClient    HTTPClient
 	Signals       func(context.Context) (context.Context, context.CancelFunc)
-	Version       Version
+	// RestartRequests delivers in-place restart requests to a running op serve.
+	RestartRequests func() (<-chan os.Signal, func())
+	// CheckReplacement verifies the binary and config a restart would start.
+	CheckReplacement func(context.Context) error
+	// Reexec replaces the process with a fresh op serve after shutdown.
+	Reexec         func() error
+	ServeProcesses ServeProcesses
+	RunCommand     func(ctx context.Context, name string, args []string, stdout, stderr io.Writer) error
+	SystemdBooted  func() bool
+	Version        Version
 }
 
 type runner struct {
@@ -97,6 +108,19 @@ func Run(ctx context.Context, args []string, options Options) int {
 			return reportError(options.Stderr, usageError("version accepts no arguments"))
 		}
 		writeVersion(options.Stdout, options.Version)
+		return 0
+	}
+	if command == "restart" {
+		// Restart acts on running servers, which may use other configs, so a
+		// missing or broken local config must not block it.
+		r := &runner{options: options, config: config.Defaults(), globals: global}
+		err = r.runRestart(ctx, remaining[1:])
+		if errors.Is(err, errHelp) {
+			return 0
+		}
+		if err != nil {
+			return reportError(options.Stderr, err)
+		}
 		return 0
 	}
 
@@ -186,6 +210,24 @@ func withDefaults(options Options) Options {
 			return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 		}
 	}
+	if options.RestartRequests == nil {
+		options.RestartRequests = serveproc.NotifyRestart
+	}
+	if options.CheckReplacement == nil {
+		options.CheckReplacement = serveproc.CheckReplacement
+	}
+	if options.Reexec == nil {
+		options.Reexec = serveproc.Reexec
+	}
+	if options.ServeProcesses == nil {
+		options.ServeProcesses = serveproc.New(runtimeDir(options.LookupEnv))
+	}
+	if options.RunCommand == nil {
+		options.RunCommand = runCommand
+	}
+	if options.SystemdBooted == nil {
+		options.SystemdBooted = systemd.Booted
+	}
 	if options.Version.Version == "" {
 		options.Version.Version = "dev"
 	}
@@ -243,16 +285,23 @@ func shellWord(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func (r *runner) snapshotCachePath() string {
-	root := r.options.LookupEnv("XDG_RUNTIME_DIR")
+// runtimeDir holds per-user runtime state shared between op processes.
+func runtimeDir(lookupEnv func(string) string) string {
+	root := lookupEnv("XDG_RUNTIME_DIR")
 	if root == "" || !filepath.IsAbs(root) {
 		cache, err := os.UserCacheDir()
 		if err != nil {
 			return ""
 		}
-		root = filepath.Join(cache, "op", "runtime")
-	} else {
-		root = filepath.Join(root, "op")
+		return filepath.Join(cache, "op", "runtime")
+	}
+	return filepath.Join(root, "op")
+}
+
+func (r *runner) snapshotCachePath() string {
+	root := runtimeDir(r.options.LookupEnv)
+	if root == "" {
+		return ""
 	}
 	identity := sha256.Sum256([]byte(r.config.Tmux.Socket + "\x00" + r.config.Tmux.Session))
 	return filepath.Join(root, fmt.Sprintf("dashboard-%x.json", identity[:8]))
@@ -335,6 +384,9 @@ Commands:
   dashboard                         Run the dashboard in the current pane
   tree                              Select a pane from the managed process tree
   serve                             Run the authenticated remote API
+  restart [--timeout DURATION]      Restart running op serve processes in place
+  service install|uninstall|start|stop|restart|status|logs
+                                    Manage op serve as a systemd user service
   notify install-claude|install-grok|install-codex|install-copilot
                                     Install agent hook plugins for notifications
   projects [--json]                 List local projects

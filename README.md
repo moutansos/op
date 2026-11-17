@@ -136,7 +136,9 @@ Commands:
 | `op clone <url> [--directory NAME] [--open] [--profile NAME]`                 | Clone an HTTPS, SSH, or SCP-style Git URL. `--profile` requires `--open`.                                                                                                                   |
 | `op new <name> [--open] [--profile NAME]`                                     | Initialize a repository under `repoDirectory`.                                                                                                                                              |
 | `op worktree <project> <branch> [--directory NAME] [--open] [--profile NAME]` | Create a new branch and sibling worktree.                                                                                                                                                   |
-| `op serve`                                                                    | Start the authenticated HTTP API until interrupted. Hosts notification watching and hook ingest when `notifications` is enabled.                                                            |
+| `op serve [--check]`                                                          | Start the authenticated HTTP API until interrupted. Hosts notification watching and hook ingest when `notifications` is enabled. `--check` validates the configuration without listening.  |
+| `op restart [--timeout DURATION]`                                             | Restart every running `op serve` you own so it picks up a rebuilt binary or config changes. See [Restarting op serve](#restarting-op-serve).                                                |
+| `op service install\|uninstall\|start\|stop\|restart\|status\|logs`              | Manage `op serve` as a systemd user service. See [systemd User Service](#systemd-user-service).                                                                                             |
 | `op notify install-claude\|install-grok\|install-codex\|install-copilot`        | Install hook plugins that forward Claude / Grok / Codex / Copilot events to `op serve`.                                                                                                     |
 | `op remote projects`                                                          | List projects from a remote server.                                                                                                                                                         |
 | `op remote clone <url> [--directory NAME] [--open] [--profile NAME]`          | Queue a remote clone and print its job JSON.                                                                                                                                                |
@@ -740,24 +742,51 @@ Runtime API documentation:
 The Swagger UI loads its static assets from `unpkg.com`; the OpenAPI JSON remains available without
 internet access.
 
-### systemd User Service
+### Restarting op serve
 
-An example unit is provided at [`docs/op.service`](docs/op.service). It assumes the binary is at
-`~/.local/bin/op`, the config is at `~/.config/op/config.json`, and the token is supplied by
-`server.tokenFile`.
+After rebuilding `op` or editing its configuration, run:
 
 ```sh
-mkdir -p "$HOME/.config/systemd/user"
-cp docs/op.service "$HOME/.config/systemd/user/op.service"
-systemctl --user daemon-reload
-systemctl --user enable --now op.service
-systemctl --user status op.service
-journalctl --user -u op.service -f
+op restart
 ```
 
-Adjust the unit's `PATH` if the configured shell, editor, Git, or tmux is installed elsewhere. To
-run the user service after logout, an administrator or the user (where permitted) can run
-`loginctl enable-linger "$USER"`.
+`op restart` finds every `op serve` process you own (via `/proc`, so Linux and WSL only):
+
+- A server that is the main process of a systemd user unit is checked with `op serve --check`, then
+  restarted with `systemctl --user daemon-reload` and `systemctl --user restart <unit>`. Servers run
+  by a system unit are reported with the `sudo systemctl restart` command to run instead.
+- Any other server, such as one in a terminal or tmux pane, is sent `SIGUSR1`. It runs its
+  replacement binary with the same arguments plus `--check`. If the check passes, it shuts down
+  gracefully and re-executes itself with the same PID, arguments, working directory, and
+  environment, so it stays in the same pane. If the check fails, it keeps serving and `op restart`
+  reports the error.
+- With no running server, it starts an installed `op.service` if there is one.
+
+`op restart` waits up to `--timeout` (30 seconds by default) for each server to listen again. Servers
+started by builds without restart support exit on `SIGUSR1`; `op restart` prints the command to
+start them again. A dashboard hosting the API with `server.enabled` is not restarted.
+
+### systemd User Service
+
+On Linux with systemd, `op service install` writes `~/.config/systemd/user/op.service` for the
+current `op` binary, the loaded config file, and the current `PATH`. It then enables and starts
+the unit:
+
+```sh
+op service install            # --no-start to only enable; --force to replace a modified unit
+op service status
+op service logs --follow      # journalctl --user -u op.service
+op restart                    # or op service restart
+op service uninstall
+```
+
+The unit cannot see `OP_API_TOKEN` from your shell, so set `server.tokenFile` (or `server.token`).
+If an `op serve` is already running outside systemd, the unit is enabled but not started; stop that
+server, then run `op service start`. Rerun `op service install --force` after moving the binary or
+config, or to pick up a new `PATH`. To keep the user service running after logout, an administrator
+or the user (where permitted) can run `loginctl enable-linger "$USER"`.
+
+A hand-maintained example unit is also provided at [`docs/op.service`](docs/op.service).
 
 ## Troubleshooting
 
@@ -766,7 +795,8 @@ run the user service after logout, an administrator or the user (where permitted
 - **Repository root not found:** create `repoDirectory`; `op` intentionally does not infer or
   silently create the catalog root.
 - **Dependency executable not found:** put `git`, `tmux`, the preferred shell, and action programs
-  in `PATH`. systemd uses the explicit `PATH` in the example unit.
+  in `PATH`. systemd uses the explicit `PATH` in the unit; rerun `op service install --force` from a
+  shell with the right `PATH` to update it.
 - **Dashboard says the terminal is too small:** resize to at least 44x14. Use `1`, `2`, and `3` in
   tabbed mode.
 - **An editor/shell pane exits during setup:** run the configured command directly and verify it

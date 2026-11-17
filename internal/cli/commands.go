@@ -2,19 +2,23 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 
 	actionpolicy "github.com/moutansos/op/internal/action"
 	"github.com/moutansos/op/internal/config"
 	"github.com/moutansos/op/internal/domain"
 	"github.com/moutansos/op/internal/notify"
+	"github.com/moutansos/op/internal/serveproc"
 	"github.com/moutansos/op/internal/server"
 	"github.com/moutansos/op/internal/state"
 	"github.com/moutansos/op/internal/tui"
@@ -41,6 +45,8 @@ func (r *runner) runLocal(ctx context.Context, args []string) error {
 		return r.runTree(ctx, args[1:])
 	case "serve":
 		return r.runServe(ctx, args[1:])
+	case "service":
+		return r.runService(ctx, args[1:])
 	case "notify":
 		return r.runNotify(ctx, args[1:])
 	case "projects":
@@ -286,22 +292,106 @@ func (r *runner) runDashboardUI(ctx context.Context, service Service, tracker *s
 }
 
 func (r *runner) runServe(ctx context.Context, args []string) error {
-	usage := func() { fmt.Fprintln(r.options.Stdout, "Usage: op serve") }
-	positionals, err := parseFlags("serve", args, nil, usage, func(*flag.FlagSet) {})
+	var check bool
+	usage := func() {
+		fmt.Fprintln(r.options.Stdout, `Usage: op serve [--check]
+
+  --check  validate the configuration and server settings without listening
+
+Run op restart (or send SIGUSR1) to restart in place with a rebuilt binary or
+new config. The replacement is checked first; if the check fails, the running
+server keeps serving.`)
+	}
+	positionals, err := parseFlags("serve", args, map[string]optionKind{"--check": boolOption}, usage, func(set *flag.FlagSet) {
+		set.BoolVar(&check, "check", false, "validate without listening")
+	})
 	if err != nil {
 		return err
 	}
 	if len(positionals) != 0 {
 		return usageError("serve accepts no arguments")
 	}
-	service, err := r.getService(ctx)
-	if err != nil {
-		return err
+	if check {
+		service, err := r.getService(ctx)
+		if err != nil {
+			return err
+		}
+		if err := r.checkServe(service); err != nil {
+			return err
+		}
+		fmt.Fprintln(r.options.Stdout, "op serve: configuration OK")
+		return nil
 	}
 	serveCtx, cancel := r.options.Signals(ctx)
 	defer cancel()
-	refreshGitStatusInBackground(serveCtx, service)
-	return r.serveRuntime(serveCtx, service, nil)
+	// Listen for restart requests before slower startup work so an early
+	// request is not fatal.
+	requests, stopRequests := r.options.RestartRequests()
+	runCtx, stopRun := context.WithCancel(serveCtx)
+	defer stopRun()
+	var restarting atomic.Bool
+	go r.watchRestartRequests(runCtx, requests, func() {
+		restarting.Store(true)
+		stopRun()
+	})
+	service, err := r.getService(runCtx)
+	if err == nil {
+		refreshGitStatusInBackground(runCtx, service)
+		err = r.serveRuntime(runCtx, service, nil)
+	}
+	if !restarting.Load() || serveCtx.Err() != nil || (err != nil && !errors.Is(err, context.Canceled)) {
+		stopRequests()
+		return err
+	}
+	// The listener and background work have stopped, so the new image can
+	// bind. The restart handler stays installed so a repeated request cannot
+	// kill the process before exec.
+	fmt.Fprintln(r.options.Stderr, "op serve: restarting")
+	return r.options.Reexec()
+}
+
+// watchRestartRequests calls restart once a requested replacement passes its
+// startup check. Rejections are recorded for op restart to report.
+func (r *runner) watchRestartRequests(ctx context.Context, requests <-chan os.Signal, restart func()) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-requests:
+		}
+		fmt.Fprintln(r.options.Stderr, "op serve: restart requested; checking the replacement")
+		err := r.options.CheckReplacement(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			restart()
+			return
+		}
+		fmt.Fprintf(r.options.Stderr, "op serve: restart aborted, still serving: %v\n", err)
+		if err := serveproc.WriteRestartError(runtimeDir(r.options.LookupEnv), os.Getpid(), err); err != nil {
+			fmt.Fprintf(r.options.Stderr, "op serve: record restart failure: %v\n", err)
+		}
+	}
+}
+
+// checkServe validates everything serve needs before it binds its listener.
+func (r *runner) checkServe(service domain.Service) error {
+	options, _, _, err := r.serverOptions(service)
+	if err != nil {
+		return err
+	}
+	srv, err := server.NewServer(service, options)
+	if err != nil {
+		return err
+	}
+	srv.Close()
+	if options.TLSCertFile != "" {
+		if _, err := tls.LoadX509KeyPair(options.TLSCertFile, options.TLSKeyFile); err != nil {
+			return domain.ResourceError(domain.ErrorCodeConfig, "cli.serve", options.TLSCertFile, "load TLS certificate: "+err.Error(), err)
+		}
+	}
+	return nil
 }
 
 func (r *runner) newStateTracker(service domain.Service) (*state.Tracker, *notify.Service, error) {
@@ -356,17 +446,16 @@ func (r *runner) runParentWork(ctx context.Context, tracker *state.Tracker, noti
 	_ = tracker.Run(ctx)
 }
 
-// serveRuntime is shared by the dashboard and the standalone serve command.
-func (r *runner) serveRuntime(ctx context.Context, service domain.Service, ready func(*state.Tracker)) error {
+// serverOptions builds the API server settings along with the state tracker
+// and notifications it hosts.
+func (r *runner) serverOptions(service domain.Service) (server.Options, *state.Tracker, *notify.Service, error) {
 	token, err := r.apiToken()
 	if err != nil {
-		return err
+		return server.Options{}, nil, nil, err
 	}
 	if token == "" {
-		return domain.FieldError(domain.ErrorCodeConfig, "cli.serve", "token", "OP_API_TOKEN, server.token, or a non-empty server token file is required")
+		return server.Options{}, nil, nil, domain.FieldError(domain.ErrorCodeConfig, "cli.serve", "token", "OP_API_TOKEN, server.token, or a non-empty server token file is required")
 	}
-	serveCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	options := server.DefaultOptions()
 	options.ListenAddress = r.config.Server.Listen
 	options.Token = token
@@ -375,15 +464,25 @@ func (r *runner) serveRuntime(ctx context.Context, service domain.Service, ready
 	options.Version = r.options.Version.Version
 	tracker, notifyService, err := r.newStateTracker(service)
 	if err != nil {
-		return err
+		return server.Options{}, nil, nil, err
 	}
 	options.State = tracker
-	stateDone := make(chan struct{})
-	logger := slog.New(slog.NewTextHandler(r.options.Stderr, nil))
-	options.Logger = logger
+	options.Logger = slog.New(slog.NewTextHandler(r.options.Stderr, nil))
 	if notifyService != nil && r.config.Notifications.Ingest.Enabled {
 		options.NotifyIngest = notifyService.Ingest
 	}
+	return options, tracker, notifyService, nil
+}
+
+// serveRuntime is shared by the dashboard and the standalone serve command.
+func (r *runner) serveRuntime(ctx context.Context, service domain.Service, ready func(*state.Tracker)) error {
+	options, tracker, notifyService, err := r.serverOptions(service)
+	if err != nil {
+		return err
+	}
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stateDone := make(chan struct{})
 	started := false
 	options.OnListening = func() {
 		started = true
